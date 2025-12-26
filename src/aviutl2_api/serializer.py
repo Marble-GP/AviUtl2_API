@@ -77,12 +77,9 @@ class Aup2Serializer:
             return str(value)
 
     def _format_float(self, v: float, decimals: int = 6) -> str:
-        """Format a float value."""
-        # Remove trailing zeros but keep at least one decimal
-        formatted = f"{v:.{decimals}f}".rstrip("0")
-        if formatted.endswith("."):
-            formatted += "0"
-        return formatted
+        """Format a float value with fixed decimal places."""
+        # Keep all decimal places to match original AviUtl format
+        return f"{v:.{decimals}f}"
 
     def _write_project_section(self, project: Project) -> None:
         """Write [project] section."""
