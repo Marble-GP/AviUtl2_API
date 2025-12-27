@@ -113,6 +113,11 @@ def parse_property_value(key: str, value_str: str) -> PropertyValue:
         if parts[2] in motion_types:
             return AnimatedValue.parse(value_str)
 
+    # Check if this looks like a hex color code (6 digits, hex only)
+    # These are used for: 色, 文字色, 影・縁色, 縁色, 影色, 光色, etc.
+    if len(value_str) == 6 and all(c in "0123456789abcdefABCDEF" for c in value_str):
+        return value_str
+
     # Try to parse as float
     try:
         return StaticValue(value=float(value_str))
