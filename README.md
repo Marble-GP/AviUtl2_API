@@ -1,5 +1,9 @@
 # AviUtl2 Project API
 
+[![PyPI version](https://badge.fury.io/py/aviutl2-api.svg)](https://pypi.org/project/aviutl2-api/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Python API for manipulating AviUtl ver.2 project files (.aup2).
 
 ## Overview
@@ -17,7 +21,7 @@ AviUtl ver.2 uses a text-based project format (.aup2) similar to INI files. This
 ## Installation
 
 ```bash
-pip install -e .
+pip install aviutl2-api
 ```
 
 ## CLI Quick Start
@@ -176,7 +180,9 @@ aviutl2 preview project.aup2 --strip --interval 30 -o timeline.png
 ## Development
 
 ```bash
-# Setup
+# Clone and setup
+git clone https://github.com/Marble-GP/AviUtl2_API.git
+cd AviUtl2_API
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
