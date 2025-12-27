@@ -1,18 +1,129 @@
-# AviUtl2 Project Coding API
+# CLAUDE.md
 
-## Project Overview
+このファイルはClaude Code (claude.ai/code) がこのリポジトリで作業する際のガイダンスを提供します。
+
+## プロジェクト概要
 
 AviUtl ver.2のプロジェクトファイル(.aup2)を操作するためのPython APIライブラリ。
 .aup2はINI風のテキストフォーマットであり、パースと生成が可能。これにより、AIエージェントによる自動動画編集を実現する。
 
-## Goals
+**Vision対応LLM連携**: フレームをPNG画像としてレンダリングし、Vision機能を持つLLMが配置確認を自律的に実行できる。
 
-1. **.aup2ファイルのパース** - テキストファイルをPythonオブジェクトに変換
-2. **.aup2ファイルの生成** - Pythonオブジェクトからテキストファイルを出力
-3. **JSON変換** - LLMが扱いやすい形式への相互変換
-4. **バリデーション** - タイムライン整合性チェック（衝突検出、フレーム計算）
-5. **CLIツール** - AIエージェント自動化用コマンドラインインターフェース
-6. **プリセットシステム** - アニメーション/エフェクトの保存・再利用
+## コマンド
+
+```bash
+# 開発環境セットアップ
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+# テスト実行
+pytest                                          # 全テスト
+pytest tests/test_parser.py                     # 特定ファイル
+pytest tests/test_parser.py::TestParserBasic    # 特定クラス
+pytest tests/test_parser.py::TestParserBasic::test_parse_empty_project  # 単一テスト
+pytest -v                                       # 詳細出力
+
+# 型チェック
+mypy src/
+
+# リント
+ruff check src/
+
+# CLIテスト
+aviutl2 --help
+aviutl2 preset init
+aviutl2 new test.aup2 --width 1920 --height 1080 --fps 30
+
+# フレームプレビュー（Vision AI連携用）
+aviutl2 preview project.aup2 --frame 0 -o preview.png
+aviutl2 preview project.aup2 --frame 0 -o small.png --max-width 800   # Vision AI向け縮小
+aviutl2 preview project.aup2 --frame 0 -o half.png --scale 0.5        # 50%縮小
+aviutl2 preview project.aup2 --strip --interval 30 -o timeline.png    # フィルムストリップ
+```
+
+## Vision AI連携ワークフロー
+
+AIエージェントが動画編集結果を自己検証するためのフロー：
+
+1. **プロジェクト編集**: CLIでオブジェクト追加・移動・エフェクト適用
+2. **フレームレンダリング**: `preview`コマンドでPNG出力（縮小推奨）
+3. **Vision確認**: LLMがPNGを読み込み配置・アニメーションを確認
+4. **修正ループ**: 問題があれば編集→レンダリング→確認を繰り返す
+
+**重要**: フルHD(1920x1080)画像はAPIエラーの原因となるため、`--max-width 800`等で縮小すること。
+
+### リサイズオプション
+
+| オプション | 説明 |
+|-----------|------|
+| `--max-width N` | 最大幅をNピクセルに制限（アスペクト比維持） |
+| `--max-height N` | 最大高さをNピクセルに制限（アスペクト比維持） |
+| `--scale X` | スケール係数（例: 0.5で50%縮小） |
+
+**警告出力**:
+- アスペクト比が変更される場合は警告を表示
+- 縮小率25%未満: 細部判別困難の警告
+- 縮小率50%未満: テキスト/細線の視認性低下の注意
+
+## アーキテクチャ
+
+### データフロー
+```
+.aup2 file → parser.py → Project/Scene/TimelineObject/Effect → serializer.py → .aup2 file
+                                       ↓
+                            json_converter.py ↔ JSON (LLM用)
+                                       ↓
+                              renderer/core.py → PNG frames (Vision AI用)
+```
+
+### 主要コンポーネント
+
+- **Models** (`models/`): データ構造
+  - `Project`: プロジェクト全体（複数Scene含む）
+  - `Scene`: シーン（width, height, fps、複数TimelineObject）
+  - `TimelineObject`: タイムライン上のオブジェクト（layer, frame範囲、複数Effect）
+  - `Effect`: エフェクト（name, properties辞書）
+  - `StaticValue` / `AnimatedValue`: プロパティ値の型
+
+- **Parser** (`parser.py`): .aup2テキストをPythonオブジェクトに変換
+- **Serializer** (`serializer.py`): PythonオブジェクトをUTF-8/CRLF形式で出力
+- **JSON Converter** (`json_converter.py`): LLM連携用JSON変換
+- **Presets** (`presets.py`): アニメーション/エフェクトのプリセット管理
+- **CLI** (`cli.py`): Clickベースのコマンドラインツール
+
+- **Renderer** (`renderer/`): フレームプレビュー生成（OpenCV/Pillow使用）
+  - `core.py`: FrameRendererがオブジェクトをレイヤー順にレンダリング
+  - `canvas.py`: FrameBuffer（リサイズ機能付き）
+  - `content/`: 図形、テキスト、画像、動画のレンダラー
+  - `filters/`: ぼかし、縁取り、影、グローのフィルタ
+  - `transform.py`: 座標変換、回転、拡大縮小
+  - `blend.py`: 13種類の合成モード処理
+  - `interpolation.py`: アニメーション補間（直線、補間、瞬間、反復、回転）
+
+## ディレクトリ構造
+
+```
+src/aviutl2_api/
+├── models/
+│   ├── project.py    # Project, Scene, TimelineObject, Effect
+│   └── values.py     # StaticValue, AnimatedValue, AnimationParams
+├── parser.py         # .aup2パーサー
+├── serializer.py     # .aup2シリアライザ
+├── json_converter.py # JSON変換
+├── presets.py        # プリセットシステム
+├── cli.py            # CLIツール
+└── renderer/         # フレームレンダラー
+    ├── core.py       # FrameRenderer
+    ├── canvas.py     # FrameBuffer
+    ├── interpolation.py  # アニメーション補間
+    ├── transform.py  # 座標変換
+    ├── blend.py      # 合成モード
+    ├── content/      # コンテンツレンダラー
+    │   ├── shape.py, text.py, image.py, video.py
+    └── filters/      # フィルタエフェクト
+        ├── blur.py, border.py, shadow.py, glow.py
+```
 
 ## .aup2 File Format
 
@@ -322,95 +433,6 @@ Z=0.0                     # Z方向振幅
 
 ---
 
-## Development Stack
-
-- **Language**: Python 3.10+
-- **Package Manager**: pip / uv
-- **Testing**: pytest
-- **Type Checking**: mypy
-- **Linting**: ruff
-
-## Directory Structure
-
-```
-aviutl2_api/
-├── src/
-│   └── aviutl2_api/
-│       ├── __init__.py
-│       ├── models/
-│       │   ├── __init__.py
-│       │   ├── project.py    # Project, Scene, TimelineObject, Effect
-│       │   └── values.py     # StaticValue, AnimatedValue, AnimationParams
-│       ├── parser.py         # .aup2パーサー
-│       ├── serializer.py     # .aup2シリアライザ
-│       ├── json_converter.py # JSON変換
-│       ├── presets.py        # プリセットシステム
-│       └── cli.py            # CLIツール
-├── tests/
-├── samples/                   # サンプル.aup2ファイル
-│   ├── PresetDemo2.aup2      # プリセットデモ
-│   └── PresetDemo_fix.aup2   # 正しいフォーマットのリファレンス
-├── docs/
-│   ├── CLI_MANUAL.md         # CLI詳細マニュアル
-│   └── aup2_format_specification.md
-├── pyproject.toml
-├── README.md
-└── CLAUDE.md                  # このファイル
-```
-
-## Development Status
-
-### 完了済み
-- [x] .aup2ファイルの読み込み・パース
-- [x] Pythonオブジェクトから.aup2への出力
-- [x] ラウンドトリップテスト
-- [x] Project, Scene, TimelineObject, Effect クラス
-- [x] レイヤー衝突検出
-- [x] フレーム/秒変換ユーティリティ
-- [x] JSON エクスポート/インポート
-- [x] CLIツール実装
-- [x] プリセットシステム（17種類のサンプルプリセット）
-
-### CLI コマンド一覧
-
-| コマンド | 説明 |
-|---------|------|
-| `new` | 新規プロジェクト作成 |
-| `info` | プロジェクト情報表示 |
-| `timeline` | ASCIIタイムライン表示 |
-| `add text/shape/video/image/audio` | オブジェクト追加 |
-| `move` | オブジェクト移動 |
-| `delete` | オブジェクト削除 |
-| `copy` | オブジェクト複製 |
-| `modify` | プロパティ変更 |
-| `animate` | アニメーション設定 |
-| `filter add` | フィルタ追加 |
-| `preset list/show/apply/save/delete/init` | プリセット管理 |
-| `export-json` / `import-json` | JSON変換 |
-
-## Commands
-
-```bash
-# 開発環境セットアップ
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-
-# テスト実行
-pytest
-
-# 型チェック
-mypy src/
-
-# リント
-ruff check src/
-
-# CLIテスト
-aviutl2 --help
-aviutl2 preset init
-aviutl2 new test.aup2 --width 1920 --height 1080 --fps 30
-```
-
 ## 実装上の注意点
 
 ### 色値の取り扱い
@@ -423,8 +445,41 @@ AviUtl2は日本語のプロパティ名を使用する。内部名（type, colo
 ### アニメーションパラメータ
 回転モード等でベジエ曲線を使用する場合、パラメータは `|` で区切られた形式で指定する。
 
-## Notes
+## 参考資料
 
 - リファレンスファイル: `samples/PresetDemo_fix.aup2`
 - CLI詳細: `docs/CLI_MANUAL.md`
 - フォーマット仕様: `docs/aup2_format_specification.md`
+
+## 開発状況
+
+### 完了済み
+- [x] .aup2ファイルの読み込み・パース
+- [x] Pythonオブジェクトから.aup2への出力
+- [x] ラウンドトリップテスト
+- [x] Project, Scene, TimelineObject, Effect クラス
+- [x] レイヤー衝突検出
+- [x] フレーム/秒変換ユーティリティ
+- [x] JSON エクスポート/インポート
+- [x] CLIツール実装
+- [x] プリセットシステム（17種類のサンプルプリセット）
+- [x] フレームレンダラー（Vision AI連携用）
+- [x] 画像リサイズ機能（アスペクト比警告、品質警告付き）
+
+### CLI コマンド一覧
+
+| コマンド | 説明 |
+|---------|------|
+| `new` | 新規プロジェクト作成 |
+| `info` | プロジェクト情報表示 |
+| `timeline` | ASCIIタイムライン表示 |
+| `preview` | フレームをPNGでレンダリング（Vision AI用） |
+| `add text/shape/video/image/audio` | オブジェクト追加 |
+| `move` | オブジェクト移動 |
+| `delete` | オブジェクト削除 |
+| `copy` | オブジェクト複製 |
+| `modify` | プロパティ変更 |
+| `animate` | アニメーション設定 |
+| `filter add` | フィルタ追加 |
+| `preset list/show/apply/save/delete/init` | プリセット管理 |
+| `export-json` / `import-json` | JSON変換 |

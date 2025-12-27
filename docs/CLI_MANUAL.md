@@ -40,6 +40,7 @@ pip install -e .
 | `new` | 新規プロジェクト作成 |
 | `info` | プロジェクト情報表示 |
 | `timeline` | ASCIIタイムライン表示 |
+| `preview` | フレームをPNGでレンダリング（Vision AI用） |
 | `layers` | レイヤー一覧表示 |
 | `objects` | オブジェクト一覧表示 |
 | `range` | 区間内オブジェクト列挙 |
@@ -148,6 +149,89 @@ aviutl2 timeline project.aup2 --compact
 # 複合指定
 aviutl2 timeline project.aup2 -l 0,2,4 --from 0 --to 100
 ```
+
+---
+
+## フレームプレビュー（Vision AI連携）
+
+### preview - フレームレンダリング
+
+プロジェクトのフレームをPNG画像としてレンダリングします。Vision機能を持つLLMが配置確認を行うために使用します。
+
+```bash
+aviutl2 preview <file.aup2> [OPTIONS]
+```
+
+**オプション:**
+| オプション | 説明 | デフォルト |
+|-----------|------|-----------|
+| `-f, --frame` | レンダリングするフレーム番号 | 0 |
+| `-o, --output` | 出力ファイルパス | (必須) |
+| `--strip` | フィルムストリップモード（複数フレームを横並び） | OFF |
+| `--interval` | ストリップモードのフレーム間隔 | 30 |
+| `-s, --scene` | シーン番号 | 0 |
+| `--max-width` | 最大幅（ピクセル） | なし |
+| `--max-height` | 最大高さ（ピクセル） | なし |
+| `--scale` | スケール係数（例: 0.5で50%縮小） | なし |
+
+**例:**
+```bash
+# 単一フレームをレンダリング
+aviutl2 preview project.aup2 --frame 0 -o preview.png
+
+# Vision AI向けに縮小（推奨）
+aviutl2 preview project.aup2 --frame 0 -o small.png --max-width 800
+
+# 50%スケールで出力
+aviutl2 preview project.aup2 --frame 0 -o half.png --scale 0.5
+
+# フィルムストリップ（30フレーム間隔）
+aviutl2 preview project.aup2 --strip --interval 30 -o timeline.png
+
+# 特定フレームを確認
+aviutl2 preview project.aup2 --frame 120 -o frame120.png --max-width 800
+```
+
+### リサイズオプション
+
+Vision AI APIはフルHD（1920x1080）画像でエラーになることがあります。`--max-width` 等で縮小することを推奨します。
+
+| オプション | 説明 |
+|-----------|------|
+| `--max-width N` | 最大幅をNピクセルに制限（アスペクト比維持） |
+| `--max-height N` | 最大高さをNピクセルに制限（アスペクト比維持） |
+| `--scale X` | スケール係数（例: 0.5で50%縮小） |
+
+**自動警告:**
+- アスペクト比が変更される場合に警告
+- 縮小率50%未満: テキストや細い線が見づらくなる可能性
+- 縮小率25%未満: 細部が判別困難になる可能性
+
+### Vision AI連携ワークフロー
+
+AIエージェントが動画編集結果を自己検証するためのフロー：
+
+1. **プロジェクト編集**: CLIでオブジェクト追加・移動・エフェクト適用
+2. **フレームレンダリング**: `preview`コマンドでPNG出力（縮小推奨）
+3. **Vision確認**: LLMがPNGを読み込み配置・アニメーションを確認
+4. **修正ループ**: 問題があれば編集→レンダリング→確認を繰り返す
+
+**例:**
+```bash
+# オブジェクトを追加
+aviutl2 add text project.aup2 "タイトル" --from 0 --to 90 --size 72
+
+# プレビューで確認
+aviutl2 preview project.aup2 --frame 45 -o check.png --max-width 800
+
+# LLMがcheck.pngを確認し、修正が必要なら...
+aviutl2 modify project.aup2 0 --x 100 --y -50
+
+# 再度プレビュー
+aviutl2 preview project.aup2 --frame 45 -o check2.png --max-width 800
+```
+
+---
 
 ### layers - レイヤー一覧
 

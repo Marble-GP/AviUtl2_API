@@ -12,6 +12,7 @@ AviUtl ver.2 uses a text-based project format (.aup2) similar to INI files. This
 - **Validation**: Timeline collision detection and frame calculations
 - **CLI Tool**: Command-line interface for AI agent automation
 - **Preset System**: Save and reuse animation/effect combinations
+- **Frame Preview**: Render frames to PNG for Vision AI verification
 
 ## Installation
 
@@ -35,6 +36,10 @@ aviutl2 timeline project.aup2
 # Apply preset
 aviutl2 preset init                         # Initialize sample presets
 aviutl2 preset apply project.aup2 0 fade-in # Apply preset to object
+
+# Preview frame (for Vision AI)
+aviutl2 preview project.aup2 --frame 0 -o preview.png
+aviutl2 preview project.aup2 --frame 0 -o small.png --max-width 800  # Resized for API
 
 # Add animation
 aviutl2 animate project.aup2 0 opacity --start 0 --end 100 --motion smooth
@@ -72,6 +77,7 @@ json_data = to_json(project)
 | `new` | Create new project |
 | `info` | Show project information |
 | `timeline` | Display ASCII timeline |
+| `preview` | Render frame to PNG for Vision AI |
 | `layers` | List layers |
 | `objects` | List objects |
 | `search` | Search objects at frame |
@@ -116,6 +122,36 @@ json_data = to_json(project)
 |---------|-------------|
 | `export-json` | Export project to JSON |
 | `import-json` | Import project from JSON |
+
+## Frame Preview (Vision AI Integration)
+
+Render project frames to PNG images for verification by Vision-enabled LLMs.
+
+```bash
+# Render single frame
+aviutl2 preview project.aup2 --frame 0 -o preview.png
+
+# Resize for Vision AI (recommended to avoid API size limits)
+aviutl2 preview project.aup2 --frame 0 -o small.png --max-width 800
+aviutl2 preview project.aup2 --frame 0 -o small.png --max-height 600
+aviutl2 preview project.aup2 --frame 0 -o half.png --scale 0.5
+
+# Render filmstrip (multiple frames in one image)
+aviutl2 preview project.aup2 --strip --interval 30 -o timeline.png
+```
+
+### Resize Options
+
+| Option | Description |
+|--------|-------------|
+| `--max-width N` | Limit width to N pixels (maintains aspect ratio) |
+| `--max-height N` | Limit height to N pixels (maintains aspect ratio) |
+| `--scale X` | Scale factor (e.g., 0.5 for 50% size) |
+
+**Warnings**: The tool automatically warns when:
+- Aspect ratio would be changed
+- Scale factor is below 50% (text/lines may become hard to read)
+- Scale factor is below 25% (details may be lost)
 
 ## Sample Presets
 
