@@ -2082,6 +2082,131 @@ def _print_timeline(
     click.echo("凡例: 動=動画 画=画像 音=音声 図=図形 テ=テキスト")
 
 
+# =============================================================================
+# プレビューコマンド
+# =============================================================================
+
+
+@main.command()
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("--frame", "-f", type=int, default=0, help="レンダリングするフレーム番号")
+@click.option("--frames", type=str, default=None, help="複数フレーム指定（例: 0,30,60,90）")
+@click.option("--strip", is_flag=True, help="フィルムストリップ表示")
+@click.option("--interval", type=int, default=30, help="ストリップのフレーム間隔")
+@click.option("--output", "-o", type=click.Path(path_type=Path), required=True, help="出力ファイルパス")
+@click.option("--scene", "-s", type=int, default=0, help="シーン番号")
+@click.option("--background", "-b", type=str, default="000000", help="背景色（16進数、例: 000000）")
+def preview(
+    file: Path,
+    frame: int,
+    frames: Optional[str],
+    strip: bool,
+    interval: int,
+    output: Path,
+    scene: int,
+    background: str,
+) -> None:
+    """プロジェクトのフレームプレビューを生成する。
+
+    \b
+    例:
+      aviutl2 preview project.aup2 --frame 150 -o preview.png
+      aviutl2 preview project.aup2 --frames 0,30,60 -o thumbs/
+      aviutl2 preview project.aup2 --strip --interval 30 -o timeline.png
+    """
+    try:
+        from aviutl2_api.renderer import FrameRenderer
+    except ImportError as e:
+        raise click.ClickException(
+            f"レンダラーのインポートに失敗しました。opencv-python と pillow がインストールされていることを確認してください: {e}"
+        )
+
+    # Parse background color
+    try:
+        if len(background) == 6:
+            r = int(background[0:2], 16)
+            g = int(background[2:4], 16)
+            b = int(background[4:6], 16)
+            bg_color = (r, g, b, 255)
+        else:
+            bg_color = (0, 0, 0, 255)
+    except ValueError:
+        bg_color = (0, 0, 0, 255)
+
+    # Load project
+    project = parse_file(file)
+
+    # Create renderer
+    try:
+        renderer = FrameRenderer(project, scene_id=scene, background_color=bg_color)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+    sc = project.get_scene(scene)
+    if sc is None:
+        raise click.ClickException(f"シーン {scene} が見つかりません。")
+
+    if strip:
+        # Filmstrip mode
+        max_frame = sc.max_frame or 100
+        result = renderer.render_strip(0, max_frame, interval)
+
+        output.parent.mkdir(parents=True, exist_ok=True)
+        result.buffer.save(output)
+
+        click.echo(f"フィルムストリップ生成: {output}")
+        click.echo(f"  フレーム: 0 - {max_frame} (間隔: {interval})")
+        click.echo(f"  レンダリング時間: {result.render_time_ms:.1f}ms")
+
+        if result.warnings:
+            for w in result.warnings:
+                click.echo(f"  警告: {w}", err=True)
+        if result.missing_media:
+            click.echo(f"  欠落ファイル: {len(result.missing_media)}件", err=True)
+
+    elif frames:
+        # Multiple frames mode
+        frame_list = [int(f.strip()) for f in frames.split(",")]
+
+        output.mkdir(parents=True, exist_ok=True)
+
+        total_time = 0.0
+        for f in frame_list:
+            result = renderer.render_frame(f)
+            out_path = output / f"frame_{f:05d}.png"
+            result.buffer.save(out_path)
+            total_time += result.render_time_ms
+
+            if result.warnings:
+                for w in result.warnings:
+                    click.echo(f"フレーム {f} 警告: {w}", err=True)
+
+        click.echo(f"{len(frame_list)}フレームをレンダリング: {output}/")
+        click.echo(f"  合計時間: {total_time:.1f}ms")
+
+    else:
+        # Single frame mode
+        result = renderer.render_frame(frame)
+
+        output.parent.mkdir(parents=True, exist_ok=True)
+        result.buffer.save(output)
+
+        click.echo(f"フレーム {frame} をレンダリング: {output}")
+        click.echo(f"  解像度: {sc.width}x{sc.height}")
+        click.echo(f"  レンダリング時間: {result.render_time_ms:.1f}ms")
+
+        if result.warnings:
+            for w in result.warnings:
+                click.echo(f"  警告: {w}", err=True)
+        if result.missing_media:
+            click.echo(f"  欠落ファイル: {len(result.missing_media)}件", err=True)
+
+
+# =============================================================================
+# ヘルパー関数
+# =============================================================================
+
+
 def _print_layers(scene: Scene) -> None:
     """Print layer summary."""
     layer_map: dict[int, list[TimelineObject]] = {}
