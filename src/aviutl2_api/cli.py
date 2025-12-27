@@ -2096,6 +2096,9 @@ def _print_timeline(
 @click.option("--output", "-o", type=click.Path(path_type=Path), required=True, help="出力ファイルパス")
 @click.option("--scene", "-s", type=int, default=0, help="シーン番号")
 @click.option("--background", "-b", type=str, default="000000", help="背景色（16進数、例: 000000）")
+@click.option("--max-width", type=int, default=None, help="出力画像の最大幅（Vision AI向け縮小）")
+@click.option("--max-height", type=int, default=None, help="出力画像の最大高さ")
+@click.option("--scale", type=float, default=None, help="出力スケール（例: 0.5で50%縮小）")
 def preview(
     file: Path,
     frame: int,
@@ -2105,6 +2108,9 @@ def preview(
     output: Path,
     scene: int,
     background: str,
+    max_width: Optional[int],
+    max_height: Optional[int],
+    scale: Optional[float],
 ) -> None:
     """プロジェクトのフレームプレビューを生成する。
 
@@ -2113,6 +2119,11 @@ def preview(
       aviutl2 preview project.aup2 --frame 150 -o preview.png
       aviutl2 preview project.aup2 --frames 0,30,60 -o thumbs/
       aviutl2 preview project.aup2 --strip --interval 30 -o timeline.png
+
+    \b
+    Vision AI向け縮小:
+      aviutl2 preview project.aup2 -f 0 -o small.png --max-width 800
+      aviutl2 preview project.aup2 -f 0 -o half.png --scale 0.5
     """
     try:
         from aviutl2_api.renderer import FrameRenderer
@@ -2146,16 +2157,37 @@ def preview(
     if sc is None:
         raise click.ClickException(f"シーン {scene} が見つかりません。")
 
+    # リサイズが必要かどうか
+    needs_resize = scale is not None or max_width is not None or max_height is not None
+
+    def apply_resize(buffer: "FrameBuffer") -> tuple["FrameBuffer", list[str]]:
+        """必要に応じて画像をリサイズ"""
+        if not needs_resize:
+            return buffer, []
+        return buffer.resize(
+            width=max_width,
+            height=max_height,
+            scale=scale,
+            maintain_aspect=True,
+        )
+
     if strip:
         # Filmstrip mode
-        max_frame = sc.max_frame or 100
-        result = renderer.render_strip(0, max_frame, interval)
+        max_frame_num = sc.max_frame or 100
+        result = renderer.render_strip(0, max_frame_num, interval)
+
+        # リサイズ適用
+        final_buffer, resize_warnings = apply_resize(result.buffer)
+        for w in resize_warnings:
+            click.echo(w, err=True)
 
         output.parent.mkdir(parents=True, exist_ok=True)
-        result.buffer.save(output)
+        final_buffer.save(output)
 
         click.echo(f"フィルムストリップ生成: {output}")
-        click.echo(f"  フレーム: 0 - {max_frame} (間隔: {interval})")
+        click.echo(f"  フレーム: 0 - {max_frame_num} (間隔: {interval})")
+        if needs_resize:
+            click.echo(f"  出力解像度: {final_buffer.width}x{final_buffer.height}")
         click.echo(f"  レンダリング時間: {result.render_time_ms:.1f}ms")
 
         if result.warnings:
@@ -2173,8 +2205,14 @@ def preview(
         total_time = 0.0
         for f in frame_list:
             result = renderer.render_frame(f)
+
+            # リサイズ適用
+            final_buffer, resize_warnings = apply_resize(result.buffer)
+            for w in resize_warnings:
+                click.echo(w, err=True)
+
             out_path = output / f"frame_{f:05d}.png"
-            result.buffer.save(out_path)
+            final_buffer.save(out_path)
             total_time += result.render_time_ms
 
             if result.warnings:
@@ -2182,17 +2220,28 @@ def preview(
                     click.echo(f"フレーム {f} 警告: {w}", err=True)
 
         click.echo(f"{len(frame_list)}フレームをレンダリング: {output}/")
+        if needs_resize:
+            click.echo(f"  出力解像度: {final_buffer.width}x{final_buffer.height}")
         click.echo(f"  合計時間: {total_time:.1f}ms")
 
     else:
         # Single frame mode
         result = renderer.render_frame(frame)
 
+        # リサイズ適用
+        final_buffer, resize_warnings = apply_resize(result.buffer)
+        for w in resize_warnings:
+            click.echo(w, err=True)
+
         output.parent.mkdir(parents=True, exist_ok=True)
-        result.buffer.save(output)
+        final_buffer.save(output)
 
         click.echo(f"フレーム {frame} をレンダリング: {output}")
-        click.echo(f"  解像度: {sc.width}x{sc.height}")
+        if needs_resize:
+            click.echo(f"  元解像度: {sc.width}x{sc.height}")
+            click.echo(f"  出力解像度: {final_buffer.width}x{final_buffer.height}")
+        else:
+            click.echo(f"  解像度: {sc.width}x{sc.height}")
         click.echo(f"  レンダリング時間: {result.render_time_ms:.1f}ms")
 
         if result.warnings:

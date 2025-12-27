@@ -108,6 +108,106 @@ class FrameBuffer:
         img = self.to_pil()
         img.save(path, format=format)
 
+    def resize(
+        self,
+        width: int | None = None,
+        height: int | None = None,
+        scale: float | None = None,
+        maintain_aspect: bool = True,
+    ) -> tuple["FrameBuffer", list[str]]:
+        """リサイズされたFrameBufferを返す。
+
+        Args:
+            width: 目標幅（ピクセル）
+            height: 目標高さ（ピクセル）
+            scale: スケール係数（例: 0.5で50%縮小）
+            maintain_aspect: アスペクト比を維持するか（デフォルト: True）
+
+        Returns:
+            (リサイズされたFrameBuffer, 警告リスト)のタプル
+
+        Note:
+            - scale指定時はwidth/heightは無視される
+            - width/heightのみ指定時、maintain_aspect=Trueなら比率維持
+            - 両方指定でmaintain_aspect=Falseならアスペクト比変更
+        """
+        import cv2
+
+        warnings: list[str] = []
+
+        if scale is not None:
+            # スケール指定
+            new_width = int(self.width * scale)
+            new_height = int(self.height * scale)
+        elif width is not None and height is not None:
+            if maintain_aspect:
+                # アスペクト比維持で収まるサイズ
+                orig_aspect = self.width / self.height
+                target_aspect = width / height
+
+                if abs(orig_aspect - target_aspect) > 0.01:
+                    warnings.append(
+                        f"警告: 指定サイズ({width}x{height})のアスペクト比が"
+                        f"元({self.width}x{self.height})と異なります。比率を維持します。"
+                    )
+
+                if orig_aspect > target_aspect:
+                    new_width = width
+                    new_height = int(width / orig_aspect)
+                else:
+                    new_height = height
+                    new_width = int(height * orig_aspect)
+            else:
+                # アスペクト比変更
+                orig_aspect = self.width / self.height
+                target_aspect = width / height
+                if abs(orig_aspect - target_aspect) > 0.01:
+                    warnings.append(
+                        f"警告: アスペクト比が変更されます "
+                        f"({self.width}:{self.height} → {width}:{height})"
+                    )
+                new_width = width
+                new_height = height
+        elif width is not None:
+            # 幅のみ指定
+            new_width = width
+            new_height = int(self.height * (width / self.width))
+        elif height is not None:
+            # 高さのみ指定
+            new_height = height
+            new_width = int(self.width * (height / self.height))
+        else:
+            # 何も指定なし
+            return self.copy(), warnings
+
+        # 最小サイズチェック
+        new_width = max(1, new_width)
+        new_height = max(1, new_height)
+
+        # 縮小率計算
+        scale_factor = min(new_width / self.width, new_height / self.height)
+
+        # 品質低下警告
+        if scale_factor < 0.25:
+            warnings.append(
+                f"警告: 縮小率が25%未満({scale_factor:.1%})のため、"
+                "細部が判別困難になる可能性があります。"
+            )
+        elif scale_factor < 0.5:
+            warnings.append(
+                f"注意: 縮小率が50%未満({scale_factor:.1%})です。"
+                "テキストや細い線が見づらくなる可能性があります。"
+            )
+
+        # リサイズ実行（LANCZOSで高品質）
+        resized = cv2.resize(
+            self.data,
+            (new_width, new_height),
+            interpolation=cv2.INTER_LANCZOS4 if scale_factor < 1.0 else cv2.INTER_LINEAR,
+        )
+
+        return FrameBuffer(width=new_width, height=new_height, data=resized), warnings
+
     def copy(self) -> FrameBuffer:
         """Create a copy of this frame buffer.
 

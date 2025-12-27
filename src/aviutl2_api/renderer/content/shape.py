@@ -76,8 +76,10 @@ class ShapeRenderer(ContentRenderer):
         r, g, b = parse_hex_color(color_hex)
 
         # Calculate dimensions
-        width = int(size * 2)
-        height = int(size * 2 * (1 + aspect / 100.0))
+        # "サイズ" is the bounding box size - the shape fits within this box
+        # with its centroid at the center and at least one point touching the edge
+        width = int(size)
+        height = int(size * (1 + aspect / 100.0))
 
         if width <= 0:
             width = 2
