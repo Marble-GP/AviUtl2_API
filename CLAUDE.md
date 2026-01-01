@@ -147,7 +147,7 @@ src/aviutl2_api/
 ```ini
 [project]
 version=2001901
-file=<filepath>
+ファイル=<filepath>
 display.scene=0
 
 [scene.N]

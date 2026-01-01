@@ -444,7 +444,7 @@ Z=0.00,0.00,回転,4|360|0,1,0.485532,-0.475783,1,0,0.484522,-0.481481
 ```ini
 [project]
 version=2001901
-file=C:\path\to\project.aup2
+ファイル=C:\path\to\project.aup2
 display.scene=0
 [scene.0]
 scene=0

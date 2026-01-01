@@ -85,7 +85,7 @@ class Aup2Serializer:
         """Write [project] section."""
         self._write_section("project")
         self._write_kv("version", project.version)
-        self._write_kv("file", project.file_path)
+        self._write_kv("ファイル", project.file_path)
         self._write_kv("display.scene", project.display_scene)
 
     def _write_scene_section(self, scene: Scene) -> None:

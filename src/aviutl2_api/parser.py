@@ -101,7 +101,8 @@ class Aup2Parser:
         if "project" in self._sections:
             proj_data = self._sections["project"]
             project.version = int(proj_data.get("version", "2001901"))
-            project.file_path = proj_data.get("file", "")
+            # Support both "ファイル" (correct Japanese) and "file" (old format)
+            project.file_path = proj_data.get("ファイル", proj_data.get("file", ""))
             project.display_scene = int(proj_data.get("display.scene", "0"))
 
         # Parse [scene.N] sections
