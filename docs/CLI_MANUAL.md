@@ -540,6 +540,10 @@ aviutl2 modify <file.aup2> <object_id> [OPTIONS]
 | `--size` | サイズを変更（テキスト/図形） |
 | `--color` | 色を変更（16進数） |
 | `--volume` | 音量を変更（音声） |
+| `--layer` | レイヤー位置を変更（干渉時は警告） |
+| `--from` | 開始フレームを変更（干渉時は警告） |
+| `--to` | 終了フレームを変更（干渉時は警告） |
+| `--effect-name` | メインエフェクト名を変更（画像ファイル、動画ファイルなど） |
 | `-s, --scene` | シーン番号 |
 | `-o, --output` | 出力先 |
 
@@ -556,6 +560,15 @@ aviutl2 modify project.aup2 0 --scale 150 --opacity 50
 
 # 色を赤に変更
 aviutl2 modify project.aup2 0 --color ff0000
+
+# レイヤー位置を変更（干渉があれば警告）
+aviutl2 modify project.aup2 0 --layer 3
+
+# フレーム範囲を変更
+aviutl2 modify project.aup2 0 --from 30 --to 120
+
+# エフェクト名を変更
+aviutl2 modify project.aup2 0 --effect-name "画像ファイル"
 ```
 
 ---

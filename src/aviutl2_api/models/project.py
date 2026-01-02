@@ -135,6 +135,34 @@ class Scene:
             return 0
         return max(obj.layer for obj in self.objects)
 
+    def find_collisions(
+        self,
+        layer: int,
+        frame_start: int,
+        frame_end: int,
+        exclude_object_id: int | None = None
+    ) -> list[TimelineObject]:
+        """Find objects that collide with the given layer and frame range.
+
+        Args:
+            layer: Layer number to check
+            frame_start: Start frame
+            frame_end: End frame
+            exclude_object_id: Optional object ID to exclude from check
+
+        Returns:
+            List of colliding objects
+        """
+        collisions = []
+        for obj in self.objects:
+            if exclude_object_id is not None and obj.object_id == exclude_object_id:
+                continue
+            if obj.layer == layer:
+                # Check if frame ranges overlap
+                if not (frame_end < obj.frame_start or frame_start > obj.frame_end):
+                    collisions.append(obj)
+        return collisions
+
 
 @dataclass
 class Project:

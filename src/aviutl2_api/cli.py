@@ -969,6 +969,10 @@ def delete_object(file: Path, object_id: int, scene: int, yes: bool, output: Opt
 @click.option("--size", type=float, default=None, help="サイズを変更（テキスト/図形）")
 @click.option("--color", type=str, default=None, help="色を変更（16進数）")
 @click.option("--volume", type=float, default=None, help="音量を変更（音声）")
+@click.option("--layer", type=int, default=None, help="レイヤー位置を変更")
+@click.option("--from", "frame_from", type=int, default=None, help="開始フレームを変更")
+@click.option("--to", "frame_to", type=int, default=None, help="終了フレームを変更")
+@click.option("--effect-name", type=str, default=None, help="メインエフェクト名を変更（画像ファイル、動画ファイルなど）")
 @click.option("--scene", "-s", type=int, default=0, help="シーン番号")
 @click.option("--output", "-o", type=click.Path(path_type=Path), default=None, help="出力先（省略時は上書き）")
 def modify_object(
@@ -984,6 +988,10 @@ def modify_object(
     size: Optional[float],
     color: Optional[str],
     volume: Optional[float],
+    layer: Optional[int],
+    frame_from: Optional[int],
+    frame_to: Optional[int],
+    effect_name: Optional[str],
     scene: int,
     output: Optional[Path],
 ) -> None:
@@ -1086,6 +1094,59 @@ def modify_object(
             changes.append(f"音量: {volume}")
         else:
             raise click.ClickException("このオブジェクトには音声再生効果がありません。")
+
+    # Modify layer position
+    if layer is not None:
+        old_layer = obj.layer
+        # Check for collision on new layer
+        new_frame_start = frame_from if frame_from is not None else obj.frame_start
+        new_frame_end = frame_to if frame_to is not None else obj.frame_end
+
+        collisions = sc.find_collisions(layer, new_frame_start, new_frame_end, exclude_object_id=obj.object_id)
+        for other_obj in collisions:
+            click.echo(f"警告: レイヤー {layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
+                     f"オブジェクト {other_obj.object_id} ({other_obj.object_type}) が存在します。", err=True)
+
+        obj.layer = layer
+        changes.append(f"レイヤー: {old_layer} → {layer}")
+
+    # Modify frame range
+    if frame_from is not None:
+        old_start = obj.frame_start
+        # Check for collision
+        target_layer = layer if layer is not None else obj.layer
+        new_end = frame_to if frame_to is not None else obj.frame_end
+
+        collisions = sc.find_collisions(target_layer, frame_from, new_end, exclude_object_id=obj.object_id)
+        for other_obj in collisions:
+            click.echo(f"警告: レイヤー {target_layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
+                     f"オブジェクト {other_obj.object_id} ({other_obj.object_type}) が存在します。", err=True)
+
+        obj.frame_start = frame_from
+        changes.append(f"開始フレーム: {old_start} → {frame_from}")
+
+    if frame_to is not None:
+        old_end = obj.frame_end
+        # Check for collision
+        target_layer = layer if layer is not None else obj.layer
+        new_start = frame_from if frame_from is not None else obj.frame_start
+
+        collisions = sc.find_collisions(target_layer, new_start, frame_to, exclude_object_id=obj.object_id)
+        for other_obj in collisions:
+            click.echo(f"警告: レイヤー {target_layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
+                     f"オブジェクト {other_obj.object_id} ({other_obj.object_type}) が存在します。", err=True)
+
+        obj.frame_end = frame_to
+        changes.append(f"終了フレーム: {old_end} → {frame_to}")
+
+    # Modify effect name
+    if effect_name is not None:
+        if obj.main_effect:
+            old_name = obj.main_effect.name
+            obj.main_effect.name = effect_name
+            changes.append(f"エフェクト名: {old_name} → {effect_name}")
+        else:
+            raise click.ClickException("このオブジェクトにはメインエフェクトがありません。")
 
     if not changes:
         raise click.ClickException("変更するプロパティを指定してください。")
