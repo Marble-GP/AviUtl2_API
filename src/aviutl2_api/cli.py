@@ -5,6 +5,7 @@ Stateless CLI for AI agent automation. Each command reads/writes files directly.
 
 from __future__ import annotations
 
+import platform
 from pathlib import Path
 from typing import Any, Optional
 
@@ -973,6 +974,7 @@ def delete_object(file: Path, object_id: int, scene: int, yes: bool, output: Opt
 @click.option("--from", "frame_from", type=int, default=None, help="開始フレームを変更")
 @click.option("--to", "frame_to", type=int, default=None, help="終了フレームを変更")
 @click.option("--effect-name", type=str, default=None, help="メインエフェクト名を変更（画像ファイル、動画ファイルなど）")
+@click.option("--force", is_flag=True, help="衝突時に既存オブジェクトを下のレイヤーに押し下げる")
 @click.option("--scene", "-s", type=int, default=0, help="シーン番号")
 @click.option("--output", "-o", type=click.Path(path_type=Path), default=None, help="出力先（省略時は上書き）")
 def modify_object(
@@ -992,6 +994,7 @@ def modify_object(
     frame_from: Optional[int],
     frame_to: Optional[int],
     effect_name: Optional[str],
+    force: bool,
     scene: int,
     output: Optional[Path],
 ) -> None:
@@ -1103,41 +1106,65 @@ def modify_object(
         new_frame_end = frame_to if frame_to is not None else obj.frame_end
 
         collisions = sc.find_collisions(layer, new_frame_start, new_frame_end, exclude_object_id=obj.object_id)
-        for other_obj in collisions:
-            click.echo(f"警告: レイヤー {layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
-                     f"オブジェクト {other_obj.object_id} ({other_obj.object_type}) が存在します。", err=True)
+
+        if collisions and force:
+            # Force mode: push colliding objects down
+            try:
+                movements = sc.resolve_collision_by_pushing_down(
+                    layer, new_frame_start, new_frame_end, exclude_object_id=obj.object_id
+                )
+                for moved_id, old_l, new_l in movements:
+                    moved_obj = next((o for o in sc.objects if o.object_id == moved_id), None)
+                    obj_type = moved_obj.object_type if moved_obj else "不明"
+                    click.echo(f"  オブジェクト {moved_id} ({obj_type}) をレイヤー {old_l} → {new_l} に移動", err=True)
+            except RuntimeError as e:
+                raise click.ClickException(str(e))
+        elif collisions:
+            # Non-force mode: just warn
+            for other_obj in collisions:
+                click.echo(f"警告: レイヤー {layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
+                         f"オブジェクト {other_obj.object_id} ({other_obj.object_type}) が存在します。", err=True)
 
         obj.layer = layer
         changes.append(f"レイヤー: {old_layer} → {layer}")
 
     # Modify frame range
-    if frame_from is not None:
+    if frame_from is not None or frame_to is not None:
         old_start = obj.frame_start
-        # Check for collision
-        target_layer = layer if layer is not None else obj.layer
-        new_end = frame_to if frame_to is not None else obj.frame_end
-
-        collisions = sc.find_collisions(target_layer, frame_from, new_end, exclude_object_id=obj.object_id)
-        for other_obj in collisions:
-            click.echo(f"警告: レイヤー {target_layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
-                     f"オブジェクト {other_obj.object_id} ({other_obj.object_type}) が存在します。", err=True)
-
-        obj.frame_start = frame_from
-        changes.append(f"開始フレーム: {old_start} → {frame_from}")
-
-    if frame_to is not None:
         old_end = obj.frame_end
-        # Check for collision
         target_layer = layer if layer is not None else obj.layer
         new_start = frame_from if frame_from is not None else obj.frame_start
+        new_end = frame_to if frame_to is not None else obj.frame_end
 
-        collisions = sc.find_collisions(target_layer, new_start, frame_to, exclude_object_id=obj.object_id)
-        for other_obj in collisions:
-            click.echo(f"警告: レイヤー {target_layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
-                     f"オブジェクト {other_obj.object_id} ({other_obj.object_type}) が存在します。", err=True)
+        # Skip collision check if layer was already changed (already handled above)
+        if layer is None:
+            collisions = sc.find_collisions(target_layer, new_start, new_end, exclude_object_id=obj.object_id)
 
-        obj.frame_end = frame_to
-        changes.append(f"終了フレーム: {old_end} → {frame_to}")
+            if collisions and force:
+                # Force mode: push colliding objects down
+                try:
+                    movements = sc.resolve_collision_by_pushing_down(
+                        target_layer, new_start, new_end, exclude_object_id=obj.object_id
+                    )
+                    for moved_id, old_l, new_l in movements:
+                        moved_obj = next((o for o in sc.objects if o.object_id == moved_id), None)
+                        obj_type = moved_obj.object_type if moved_obj else "不明"
+                        click.echo(f"  オブジェクト {moved_id} ({obj_type}) をレイヤー {old_l} → {new_l} に移動", err=True)
+                except RuntimeError as e:
+                    raise click.ClickException(str(e))
+            elif collisions:
+                # Non-force mode: just warn
+                for other_obj in collisions:
+                    click.echo(f"警告: レイヤー {target_layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
+                             f"オブジェクト {other_obj.object_id} ({other_obj.object_type}) が存在します。", err=True)
+
+        if frame_from is not None:
+            obj.frame_start = frame_from
+            changes.append(f"開始フレーム: {old_start} → {frame_from}")
+
+        if frame_to is not None:
+            obj.frame_end = frame_to
+            changes.append(f"終了フレーム: {old_end} → {frame_to}")
 
     # Modify effect name
     if effect_name is not None:

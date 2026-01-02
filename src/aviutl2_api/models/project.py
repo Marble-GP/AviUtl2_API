@@ -163,6 +163,91 @@ class Scene:
                     collisions.append(obj)
         return collisions
 
+    def resolve_collision_by_pushing_down(
+        self,
+        target_layer: int,
+        frame_start: int,
+        frame_end: int,
+        exclude_object_id: int | None = None,
+        max_iterations: int = 100
+    ) -> list[tuple[int, int, int]]:
+        """Resolve collisions by pushing colliding objects down to lower layers.
+
+        Args:
+            target_layer: Layer where new object will be placed
+            frame_start: Start frame
+            frame_end: End frame
+            exclude_object_id: Optional object ID to exclude from collision check
+            max_iterations: Maximum iterations to prevent infinite loops
+
+        Returns:
+            List of (object_id, old_layer, new_layer) tuples
+
+        Raises:
+            RuntimeError: If collision cannot be resolved (infinite loop detected)
+        """
+        moved_objects: dict[int, int] = {}  # object_id -> move_count
+        movements: list[tuple[int, int, int]] = []  # (object_id, old_layer, new_layer)
+        layers_to_check: set[int] = {target_layer}  # Track layers that need collision checking
+        iterations = 0
+        recently_moved: set[int] = set()  # Track objects moved in current cascade
+
+        while iterations < max_iterations and layers_to_check:
+            iterations += 1
+            current_layer = layers_to_check.pop()
+
+            # Find collisions, excluding the original object and recently moved objects
+            collisions = []
+            for obj in self.objects:
+                if exclude_object_id is not None and obj.object_id == exclude_object_id:
+                    continue
+                if obj.object_id in recently_moved:
+                    continue  # Skip objects that were just moved
+                if obj.layer == current_layer:
+                    if not (frame_end < obj.frame_start or frame_start > obj.frame_end):
+                        collisions.append(obj)
+
+            if not collisions:
+                continue  # No collisions on this layer
+
+            # Move all colliding objects down by 1 layer (increase layer number)
+            for obj in collisions:
+                old_layer = obj.layer
+                new_layer = old_layer + 1
+
+                # Check if this object has been moved too many times
+                move_count = moved_objects.get(obj.object_id, 0) + 1
+                if move_count > 3:
+                    # Restore all movements
+                    for obj_id, old_l, _ in movements:
+                        for o in self.objects:
+                            if o.object_id == obj_id:
+                                o.layer = old_l
+                                break
+                    raise RuntimeError(
+                        f"衝突解決に失敗: オブジェクト {obj.object_id} が {move_count} 回移動されました。"
+                        "レイヤー配置を見直してください。"
+                    )
+
+                moved_objects[obj.object_id] = move_count
+                obj.layer = new_layer
+                movements.append((obj.object_id, old_layer, new_layer))
+                recently_moved.add(obj.object_id)
+
+                # Add the destination layer to check for cascading collisions
+                layers_to_check.add(new_layer)
+
+        if iterations >= max_iterations:
+            # Restore all movements
+            for obj_id, old_l, _ in movements:
+                for o in self.objects:
+                    if o.object_id == obj_id:
+                        o.layer = old_l
+                        break
+            raise RuntimeError(f"衝突解決に失敗: 最大反復回数 {max_iterations} に達しました。")
+
+        return movements
+
 
 @dataclass
 class Project:
