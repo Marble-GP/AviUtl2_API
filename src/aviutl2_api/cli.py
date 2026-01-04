@@ -9,7 +9,7 @@ import platform
 import re
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import click
 
@@ -17,10 +17,10 @@ from aviutl2_api import (
     Project,
     Scene,
     TimelineObject,
+    from_json,
     parse_file,
     serialize_to_file,
     to_json,
-    from_json,
 )
 from aviutl2_api.models import Effect
 from aviutl2_api.models.values import AnimatedValue, StaticValue
@@ -126,7 +126,7 @@ def info(file: Path) -> None:
 @click.option("--scene", "-s", type=int, default=0, help="シーン番号")
 @click.option("--width", "-w", type=int, default=80, help="表示幅（文字数）")
 @click.option("--compact", "-c", is_flag=True, help="空き領域を省略してコンパクト表示")
-def timeline(file: Path, from_frame: int, to_frame: Optional[int], layer: Optional[str], scene: int, width: int, compact: bool) -> None:
+def timeline(file: Path, from_frame: int, to_frame: int | None, layer: str | None, scene: int, width: int, compact: bool) -> None:
     """タイムラインをASCII表示する。
 
     \b
@@ -171,7 +171,7 @@ def layers(file: Path, scene: int) -> None:
 @click.option("--at", "at_frame", type=int, default=None, help="指定フレームに存在するオブジェクト")
 @click.option("--scene", "-s", type=int, default=0, help="シーン番号")
 @click.option("--verbose", "-v", is_flag=True, help="詳細表示")
-def objects(file: Path, layer: Optional[int], at_frame: Optional[int], scene: int, verbose: bool) -> None:
+def objects(file: Path, layer: int | None, at_frame: int | None, scene: int, verbose: bool) -> None:
     """オブジェクト一覧を表示する。"""
     project = parse_file(file)
 
@@ -222,7 +222,7 @@ def search(file: Path, at_frame: int, scene: int) -> None:
 @click.option("--type", "obj_type", type=str, default=None, help="オブジェクトタイプでフィルタ（テキスト,図形,音声ファイル,動画ファイル,画像ファイル）")
 @click.option("--scene", "-s", type=int, default=0, help="シーン番号")
 @click.option("--verbose", "-v", is_flag=True, help="詳細表示")
-def range_search(file: Path, from_frame: int, to_frame: int, obj_type: Optional[str], scene: int, verbose: bool) -> None:
+def range_search(file: Path, from_frame: int, to_frame: int, obj_type: str | None, scene: int, verbose: bool) -> None:
     """指定区間に存在するオブジェクトを列挙する。"""
     project = parse_file(file)
 
@@ -310,7 +310,7 @@ def add_text(
     y: float,
     size: int,
     scene: int,
-    output: Optional[Path],
+    output: Path | None,
     warn_overlap: bool,
 ) -> None:
     """テキストオブジェクトを追加する。"""
@@ -440,7 +440,7 @@ def add_shape(
     size: int,
     color: str,
     scene: int,
-    output: Optional[Path],
+    output: Path | None,
     warn_overlap: bool,
 ) -> None:
     """図形オブジェクトを追加する。"""
@@ -569,7 +569,7 @@ def add_audio(
     to_frame: int,
     volume: float,
     scene: int,
-    output: Optional[Path],
+    output: Path | None,
     warn_overlap: bool,
 ) -> None:
     """音声ファイルオブジェクトを追加する。"""
@@ -672,7 +672,7 @@ def add_video(
     x: float,
     y: float,
     scene: int,
-    output: Optional[Path],
+    output: Path | None,
     warn_overlap: bool,
 ) -> None:
     """動画ファイルオブジェクトを追加する。"""
@@ -787,7 +787,7 @@ def add_image(
     x: float,
     y: float,
     scene: int,
-    output: Optional[Path],
+    output: Path | None,
     warn_overlap: bool,
 ) -> None:
     """画像ファイルオブジェクトを追加する。"""
@@ -889,11 +889,11 @@ def add_image(
 def move_object(
     file: Path,
     object_id: int,
-    layer: Optional[int],
-    from_frame: Optional[int],
-    to_frame: Optional[int],
+    layer: int | None,
+    from_frame: int | None,
+    to_frame: int | None,
     scene: int,
-    output: Optional[Path],
+    output: Path | None,
 ) -> None:
     """オブジェクトを移動する。"""
     project = parse_file(file)
@@ -950,7 +950,7 @@ def move_object(
 @click.option("--scene", "-s", type=int, default=0, help="シーン番号")
 @click.option("--yes", "-y", is_flag=True, help="確認なしで削除")
 @click.option("--output", "-o", type=click.Path(path_type=Path), default=None, help="出力先（省略時は上書き）")
-def delete_object(file: Path, object_id: int, scene: int, yes: bool, output: Optional[Path]) -> None:
+def delete_object(file: Path, object_id: int, scene: int, yes: bool, output: Path | None) -> None:
     """オブジェクトを削除する。"""
     project = parse_file(file)
 
@@ -1012,24 +1012,24 @@ def delete_object(file: Path, object_id: int, scene: int, yes: bool, output: Opt
 def modify_object(
     file: Path,
     object_id: int,
-    text: Optional[str],
-    x: Optional[float],
-    y: Optional[float],
-    z: Optional[float],
-    scale: Optional[float],
-    opacity: Optional[float],
-    rotation: Optional[float],
-    size: Optional[float],
-    color: Optional[str],
-    font: Optional[str],
-    volume: Optional[float],
-    layer: Optional[int],
-    frame_from: Optional[int],
-    frame_to: Optional[int],
-    effect_name: Optional[str],
+    text: str | None,
+    x: float | None,
+    y: float | None,
+    z: float | None,
+    scale: float | None,
+    opacity: float | None,
+    rotation: float | None,
+    size: float | None,
+    color: str | None,
+    font: str | None,
+    volume: float | None,
+    layer: int | None,
+    frame_from: int | None,
+    frame_to: int | None,
+    effect_name: str | None,
     force: bool,
     scene: int,
-    output: Optional[Path],
+    output: Path | None,
 ) -> None:
     """オブジェクトのプロパティを変更する。
 
@@ -1243,11 +1243,11 @@ def copy_object(
     file: Path,
     object_id: int,
     layer: str,
-    from_frame: Optional[int],
-    to_frame: Optional[int],
-    offset: Optional[int],
+    from_frame: int | None,
+    to_frame: int | None,
+    offset: int | None,
     scene: int,
-    output: Optional[Path],
+    output: Path | None,
 ) -> None:
     """オブジェクトを複製する。
 
@@ -1364,10 +1364,10 @@ def filter_add(
     file: Path,
     object_id: int,
     filter_type: str,
-    strength: Optional[float],
-    color: Optional[str],
+    strength: float | None,
+    color: str | None,
     scene: int,
-    output: Optional[Path],
+    output: Path | None,
 ) -> None:
     """オブジェクトにフィルタエフェクトを追加する。
 
@@ -1536,7 +1536,7 @@ def animate_property(
     end: float,
     motion: str,
     scene: int,
-    output: Optional[Path],
+    output: Path | None,
 ) -> None:
     """プロパティにアニメーションを設定する。
 
@@ -1707,7 +1707,7 @@ def preset_show(preset_id: str) -> None:
 @click.argument("preset_id")
 @click.option("--scene", "-s", type=int, default=0, help="シーン番号")
 @click.option("--output", "-o", type=click.Path(path_type=Path), default=None, help="出力先（省略時は上書き）")
-def preset_apply(file: Path, object_id: int, preset_id: str, scene: int, output: Optional[Path]) -> None:
+def preset_apply(file: Path, object_id: int, preset_id: str, scene: int, output: Path | None) -> None:
     """オブジェクトにプリセットを適用する。
 
     \b
@@ -1715,8 +1715,8 @@ def preset_apply(file: Path, object_id: int, preset_id: str, scene: int, output:
       aviutl2 preset apply project.aup2 0 spin-fade-out
       aviutl2 preset apply project.aup2 0 fade-in -o output.aup2
     """
-    from aviutl2_api.presets import PresetManager
     from aviutl2_api.models.values import AnimatedValue, AnimationParams
+    from aviutl2_api.presets import PresetManager
 
     manager = PresetManager()
     p = manager.get_preset(preset_id)
@@ -1803,7 +1803,7 @@ def preset_apply(file: Path, object_id: int, preset_id: str, scene: int, output:
 @click.option("--name", "-n", type=str, default=None, help="プリセット表示名（省略時はIDと同じ）")
 @click.option("--description", "-d", type=str, default="", help="説明")
 @click.option("--scene", "-s", type=int, default=0, help="シーン番号")
-def preset_save(file: Path, object_id: int, preset_id: str, name: Optional[str], description: str, scene: int) -> None:
+def preset_save(file: Path, object_id: int, preset_id: str, name: str | None, description: str, scene: int) -> None:
     """オブジェクトの設定をプリセットとして保存する。
 
     \b
@@ -1811,7 +1811,7 @@ def preset_save(file: Path, object_id: int, preset_id: str, name: Optional[str],
       aviutl2 preset save project.aup2 0 my-effect
       aviutl2 preset save project.aup2 0 cool-animation -n "クールなアニメ" -d "説明文"
     """
-    from aviutl2_api.presets import PresetManager, Preset, AnimationPreset, EffectPreset
+    from aviutl2_api.presets import AnimationPreset, EffectPreset, Preset, PresetManager
 
     project = parse_file(file)
 
@@ -2030,7 +2030,7 @@ def _print_project_summary(project: Project) -> None:
         safe_echo(f"  オブジェクト数: {len(sc.objects)}")
 
 
-def _print_project_info(project: Project, file_path: Optional[Path], modified: bool) -> None:
+def _print_project_info(project: Project, file_path: Path | None, modified: bool) -> None:
     """Print detailed project info."""
     safe_echo("=== プロジェクト情報 ===")
     if file_path:
@@ -2053,7 +2053,7 @@ def _print_project_info(project: Project, file_path: Optional[Path], modified: b
             safe_echo(f"  最大フレーム: {max_frame} ({max_frame / sc.fps:.2f}秒)")
 
 
-def _parse_layer_filter(layer_str: Optional[str]) -> Optional[set[int]]:
+def _parse_layer_filter(layer_str: str | None) -> set[int] | None:
     """Parse layer filter string into a set of layer numbers.
 
     Examples:
@@ -2093,7 +2093,7 @@ def _print_timeline(
     from_frame: int,
     to_frame: int,
     width: int,
-    layer_filter: Optional[set[int]] = None,
+    layer_filter: set[int] | None = None,
     compact: bool = False,
 ) -> None:
     """Print ASCII timeline."""
@@ -2232,15 +2232,15 @@ def _print_timeline(
 def preview(
     file: Path,
     frame: int,
-    frames: Optional[str],
+    frames: str | None,
     strip: bool,
     interval: int,
     output: Path,
     scene: int,
     background: str,
-    max_width: Optional[int],
-    max_height: Optional[int],
-    scale: Optional[float],
+    max_width: int | None,
+    max_height: int | None,
+    scale: float | None,
 ) -> None:
     """プロジェクトのフレームプレビューを生成する。
 
@@ -2290,7 +2290,7 @@ def preview(
     # リサイズが必要かどうか
     needs_resize = scale is not None or max_width is not None or max_height is not None
 
-    def apply_resize(buffer: "FrameBuffer") -> tuple["FrameBuffer", list[str]]:
+    def apply_resize(buffer: FrameBuffer) -> tuple[FrameBuffer, list[str]]:
         """必要に応じて画像をリサイズ"""
         if not needs_resize:
             return buffer, []
@@ -2455,21 +2455,21 @@ def _print_objects(objects: list[TimelineObject], verbose: bool) -> None:
 @click.option("--output", "-o", type=click.Path(path_type=Path), default=None, help="出力先（省略時は上書き）")
 def batch_modify(
     file: Path,
-    filter_type: Optional[str],
-    filter_text: Optional[str],
-    filter_layer: Optional[str],
-    x: Optional[float],
-    y: Optional[float],
-    z: Optional[float],
-    scale: Optional[float],
-    opacity: Optional[float],
-    rotation: Optional[float],
-    size: Optional[float],
-    color: Optional[str],
-    font: Optional[str],
+    filter_type: str | None,
+    filter_text: str | None,
+    filter_layer: str | None,
+    x: float | None,
+    y: float | None,
+    z: float | None,
+    scale: float | None,
+    opacity: float | None,
+    rotation: float | None,
+    size: float | None,
+    color: str | None,
+    font: str | None,
     scene: int,
     dry_run: bool,
-    output: Optional[Path],
+    output: Path | None,
 ) -> None:
     """フィルタ条件に一致する全オブジェクトを一括編集する。
 
