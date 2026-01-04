@@ -54,6 +54,10 @@ aviutl2 filter add project.aup2 0 blur --strength 10
 # Batch edit (regex filtering)
 aviutl2 batch project.aup2 --filter-text "Hello.*" --color ff0000  # Change all "Hello" texts to red
 aviutl2 batch project.aup2 --filter-layer "1-5" --opacity 50       # Set opacity for layers 1-5
+
+# Fix collisions (auto-resolve layer conflicts)
+aviutl2 fix project.aup2                                           # Detect and auto-fix collisions
+aviutl2 fix project.aup2 --dry-run                                 # Check only (no changes)
 ```
 
 ## Python API
@@ -106,6 +110,7 @@ json_data = to_json(project)
 | `copy` | Duplicate object |
 | `modify` | Change object properties |
 | `batch` | Batch edit with filters (regex) |
+| `fix` | Auto-fix layer collisions |
 
 ### Animation & Effects
 

@@ -2629,5 +2629,117 @@ def batch_modify(
     safe_echo(f"保存先: {save_path}")
 
 
+@main.command("fix")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("--scene", "-s", type=int, default=0, help="シーン番号")
+@click.option("--dry-run", is_flag=True, help="実行せずに干渉のみ表示")
+@click.option("--verbose", "-v", is_flag=True, help="詳細表示")
+@click.option("--output", "-o", type=click.Path(path_type=Path), default=None, help="出力先（省略時は上書き）")
+def fix_collisions(
+    file: Path,
+    scene: int,
+    dry_run: bool,
+    verbose: bool,
+    output: Path | None,
+) -> None:
+    """プロジェクト内の全干渉を検出・自動解決する。
+
+    同一レイヤー・同一時刻に複数のオブジェクトが存在する場合、
+    後のオブジェクトを下のレイヤーに自動的に押し下げます。
+
+    \b
+    例:
+      # 干渉を検出（確認のみ）
+      aviutl2 fix project.aup2 --dry-run
+
+      # 干渉を自動解決
+      aviutl2 fix project.aup2
+
+      # 詳細情報を表示
+      aviutl2 fix project.aup2 --verbose
+    """
+    project = parse_file(file)
+
+    if scene >= len(project.scenes):
+        raise click.ClickException(f"シーン {scene} は存在しません。")
+
+    sc = project.scenes[scene]
+
+    # Collect all collisions
+    all_collisions: list[tuple[int, TimelineObject, TimelineObject]] = []
+
+    # Check each layer for collisions
+    layers = sorted(set(obj.layer for obj in sc.objects))
+
+    for layer in layers:
+        layer_objects = sorted(
+            [obj for obj in sc.objects if obj.layer == layer],
+            key=lambda o: (o.frame_start, o.object_id)
+        )
+
+        # Check for overlaps within this layer
+        for i, obj1 in enumerate(layer_objects):
+            for obj2 in layer_objects[i + 1:]:
+                # Check if frame ranges overlap
+                if not (obj1.frame_end < obj2.frame_start or obj2.frame_end < obj1.frame_start):
+                    all_collisions.append((layer, obj1, obj2))
+
+    if not all_collisions:
+        safe_echo("干渉は検出されませんでした。")
+        return
+
+    # Display collisions
+    safe_echo(f"干渉検出: {len(all_collisions)}件")
+    safe_echo("")
+
+    if verbose or dry_run:
+        for layer, obj1, obj2 in all_collisions:
+            safe_echo(f"レイヤー {layer}:")
+            safe_echo(f"  ID {obj1.object_id} ({obj1.object_type}): フレーム {obj1.frame_start}-{obj1.frame_end}")
+            safe_echo(f"  ID {obj2.object_id} ({obj2.object_type}): フレーム {obj2.frame_start}-{obj2.frame_end}")
+            # Calculate overlap
+            overlap_start = max(obj1.frame_start, obj2.frame_start)
+            overlap_end = min(obj1.frame_end, obj2.frame_end)
+            safe_echo(f"  重複区間: {overlap_start}-{overlap_end}")
+            safe_echo("")
+
+    if dry_run:
+        safe_echo("--dry-run モードのため、変更は行いません。")
+        return
+
+    # Resolve collisions
+    safe_echo("干渉を自動解決中...")
+    safe_echo("")
+    total_moved = 0
+    moved_objects = set()  # Track globally which objects have been moved
+
+    # Process all collisions, moving the second object in each pair
+    for layer, obj1, obj2 in all_collisions:
+        # Skip if obj2 has already been moved
+        if obj2.object_id in moved_objects:
+            continue
+
+        # Find a safe layer for obj2
+        new_layer = obj2.layer + 1
+        while sc.find_collisions(new_layer, obj2.frame_start, obj2.frame_end, exclude_object_id=obj2.object_id):
+            new_layer += 1
+
+        old_layer = obj2.layer
+        obj2.layer = new_layer
+        moved_objects.add(obj2.object_id)
+        total_moved += 1
+
+        safe_echo(f"  ID {obj2.object_id} ({obj2.object_type}): レイヤー {old_layer} → {new_layer}")
+
+    # Save
+    if total_moved > 0:
+        save_path = output or file
+        serialize_to_file(project, save_path)
+        safe_echo(f"\n{total_moved}個のオブジェクトを移動しました。")
+        safe_echo(f"保存先: {save_path}")
+    else:
+        safe_echo("\n移動が必要なオブジェクトはありませんでした。")
+
+
 if __name__ == "__main__":
     main()
