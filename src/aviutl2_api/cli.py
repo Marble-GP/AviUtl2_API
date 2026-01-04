@@ -999,6 +999,7 @@ def delete_object(file: Path, object_id: int, scene: int, yes: bool, output: Opt
 @click.option("--rotation", type=float, default=None, help="回転角度を変更")
 @click.option("--size", type=float, default=None, help="サイズを変更（テキスト/図形）")
 @click.option("--color", type=str, default=None, help="色を変更（16進数）")
+@click.option("--font", type=str, default=None, help="フォントを変更（テキスト）")
 @click.option("--volume", type=float, default=None, help="音量を変更（音声）")
 @click.option("--layer", type=int, default=None, help="レイヤー位置を変更")
 @click.option("--from", "frame_from", type=int, default=None, help="開始フレームを変更")
@@ -1019,6 +1020,7 @@ def modify_object(
     rotation: Optional[float],
     size: Optional[float],
     color: Optional[str],
+    font: Optional[str],
     volume: Optional[float],
     layer: Optional[int],
     frame_from: Optional[int],
@@ -1118,6 +1120,15 @@ def modify_object(
             changes.append(f"色: #{color}")
         else:
             raise click.ClickException("このオブジェクトには色プロパティがありません。")
+
+    # Modify font (for text)
+    if font is not None:
+        text_effect = obj.get_effect("テキスト")
+        if text_effect:
+            text_effect.properties["フォント"] = font
+            changes.append(f"フォント: {font}")
+        else:
+            raise click.ClickException("このオブジェクトにはテキスト効果がありません。")
 
     # Modify volume (for audio)
     if volume is not None:

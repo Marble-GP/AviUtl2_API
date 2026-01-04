@@ -539,6 +539,7 @@ aviutl2 modify <file.aup2> <object_id> [OPTIONS]
 | `--rotation` | 回転角度を変更 |
 | `--size` | サイズを変更（テキスト/図形） |
 | `--color` | 色を変更（16進数） |
+| `--font` | フォントを変更（テキスト） |
 | `--volume` | 音量を変更（音声） |
 | `--layer` | レイヤー位置を変更（干渉時は警告） |
 | `--from` | 開始フレームを変更（干渉時は警告） |
@@ -560,6 +561,9 @@ aviutl2 modify project.aup2 0 --scale 150 --opacity 50
 
 # 色を赤に変更
 aviutl2 modify project.aup2 0 --color ff0000
+
+# フォントを変更
+aviutl2 modify project.aup2 0 --font "MS Gothic"
 
 # レイヤー位置を変更（干渉があれば警告）
 aviutl2 modify project.aup2 0 --layer 3
