@@ -292,8 +292,9 @@ def add() -> None:
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.argument("content")
 @click.option("--layer", "-l", type=str, default="auto", help="レイヤー番号 (autoで自動選択)")
-@click.option("--from", "from_frame", type=int, required=True, help="開始フレーム")
-@click.option("--to", "to_frame", type=int, required=True, help="終了フレーム")
+@click.option("--from", "from_frame", type=int, default=None, help="開始フレーム (省略時は末尾またはフレーム0)")
+@click.option("--to", "to_frame", type=int, default=None, help="終了フレーム (省略時は--durationまたは60フレーム)")
+@click.option("--duration", "-d", type=int, default=None, help="期間（フレーム数）")
 @click.option("--x", type=float, default=0.0, help="X座標")
 @click.option("--y", type=float, default=0.0, help="Y座標")
 @click.option("--size", type=int, default=34, help="フォントサイズ")
@@ -304,8 +305,9 @@ def add_text(
     file: Path,
     content: str,
     layer: str,
-    from_frame: int,
-    to_frame: int,
+    from_frame: int | None,
+    to_frame: int | None,
+    duration: int | None,
     x: float,
     y: float,
     size: int,
@@ -320,6 +322,9 @@ def add_text(
         raise click.ClickException(f"シーン {scene} は存在しません。")
 
     sc = project.scenes[scene]
+
+    # Calculate frame range with auto-detection
+    from_frame, to_frame = _calculate_frame_range(sc, from_frame, to_frame, duration)
 
     # Determine layer
     auto_layer = False
@@ -420,8 +425,9 @@ def add_text(
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.argument("shape_type", type=click.Choice(["circle", "rectangle", "triangle", "pentagon", "hexagon"]))
 @click.option("--layer", "-l", type=str, default="auto", help="レイヤー番号 (autoで自動選択)")
-@click.option("--from", "from_frame", type=int, required=True, help="開始フレーム")
-@click.option("--to", "to_frame", type=int, required=True, help="終了フレーム")
+@click.option("--from", "from_frame", type=int, default=None, help="開始フレーム (省略時は末尾またはフレーム0)")
+@click.option("--to", "to_frame", type=int, default=None, help="終了フレーム (省略時は--durationまたは60フレーム)")
+@click.option("--duration", "-d", type=int, default=None, help="期間（フレーム数）")
 @click.option("--x", type=float, default=0.0, help="X座標")
 @click.option("--y", type=float, default=0.0, help="Y座標")
 @click.option("--size", type=int, default=100, help="サイズ")
@@ -433,8 +439,9 @@ def add_shape(
     file: Path,
     shape_type: str,
     layer: str,
-    from_frame: int,
-    to_frame: int,
+    from_frame: int | None,
+    to_frame: int | None,
+    duration: int | None,
     x: float,
     y: float,
     size: int,
@@ -450,6 +457,9 @@ def add_shape(
         raise click.ClickException(f"シーン {scene} は存在しません。")
 
     sc = project.scenes[scene]
+
+    # Calculate frame range with auto-detection
+    from_frame, to_frame = _calculate_frame_range(sc, from_frame, to_frame, duration)
 
     # Determine layer
     auto_layer = False
@@ -555,8 +565,9 @@ def add_shape(
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.argument("audio_path", type=str)
 @click.option("--layer", "-l", type=str, default="auto", help="レイヤー番号 (autoで自動選択)")
-@click.option("--from", "from_frame", type=int, required=True, help="開始フレーム")
-@click.option("--to", "to_frame", type=int, required=True, help="終了フレーム")
+@click.option("--from", "from_frame", type=int, default=None, help="開始フレーム (省略時は末尾またはフレーム0)")
+@click.option("--to", "to_frame", type=int, default=None, help="終了フレーム (省略時はファイルの長さを自動検出)")
+@click.option("--duration", "-d", type=int, default=None, help="期間（フレーム数）")
 @click.option("--volume", type=float, default=100.0, help="音量（デフォルト: 100）")
 @click.option("--scene", "-s", type=int, default=0, help="シーン番号")
 @click.option("--output", "-o", type=click.Path(path_type=Path), default=None, help="出力先（省略時は上書き）")
@@ -565,8 +576,9 @@ def add_audio(
     file: Path,
     audio_path: str,
     layer: str,
-    from_frame: int,
-    to_frame: int,
+    from_frame: int | None,
+    to_frame: int | None,
+    duration: int | None,
     volume: float,
     scene: int,
     output: Path | None,
@@ -579,6 +591,9 @@ def add_audio(
         raise click.ClickException(f"シーン {scene} は存在しません。")
 
     sc = project.scenes[scene]
+
+    # Calculate frame range with auto-detection from media file
+    from_frame, to_frame = _calculate_frame_range(sc, from_frame, to_frame, duration, media_path=audio_path)
 
     # Determine layer
     auto_layer = False
@@ -656,8 +671,9 @@ def add_audio(
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.argument("video_path", type=str)
 @click.option("--layer", "-l", type=str, default="auto", help="レイヤー番号 (autoで自動選択)")
-@click.option("--from", "from_frame", type=int, required=True, help="開始フレーム")
-@click.option("--to", "to_frame", type=int, required=True, help="終了フレーム")
+@click.option("--from", "from_frame", type=int, default=None, help="開始フレーム (省略時は末尾またはフレーム0)")
+@click.option("--to", "to_frame", type=int, default=None, help="終了フレーム (省略時はファイルの長さを自動検出)")
+@click.option("--duration", "-d", type=int, default=None, help="期間（フレーム数）")
 @click.option("--x", type=float, default=0.0, help="X座標")
 @click.option("--y", type=float, default=0.0, help="Y座標")
 @click.option("--scene", "-s", type=int, default=0, help="シーン番号")
@@ -667,8 +683,9 @@ def add_video(
     file: Path,
     video_path: str,
     layer: str,
-    from_frame: int,
-    to_frame: int,
+    from_frame: int | None,
+    to_frame: int | None,
+    duration: int | None,
     x: float,
     y: float,
     scene: int,
@@ -682,6 +699,9 @@ def add_video(
         raise click.ClickException(f"シーン {scene} は存在しません。")
 
     sc = project.scenes[scene]
+
+    # Calculate frame range with auto-detection from media file
+    from_frame, to_frame = _calculate_frame_range(sc, from_frame, to_frame, duration, media_path=video_path)
 
     # Determine layer
     auto_layer = False
@@ -771,8 +791,9 @@ def add_video(
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.argument("image_path", type=str)
 @click.option("--layer", "-l", type=str, default="auto", help="レイヤー番号 (autoで自動選択)")
-@click.option("--from", "from_frame", type=int, required=True, help="開始フレーム")
-@click.option("--to", "to_frame", type=int, required=True, help="終了フレーム")
+@click.option("--from", "from_frame", type=int, default=None, help="開始フレーム (省略時は末尾またはフレーム0)")
+@click.option("--to", "to_frame", type=int, default=None, help="終了フレーム (省略時は--durationまたは60フレーム)")
+@click.option("--duration", "-d", type=int, default=None, help="期間（フレーム数）")
 @click.option("--x", type=float, default=0.0, help="X座標")
 @click.option("--y", type=float, default=0.0, help="Y座標")
 @click.option("--scene", "-s", type=int, default=0, help="シーン番号")
@@ -782,8 +803,9 @@ def add_image(
     file: Path,
     image_path: str,
     layer: str,
-    from_frame: int,
-    to_frame: int,
+    from_frame: int | None,
+    to_frame: int | None,
+    duration: int | None,
     x: float,
     y: float,
     scene: int,
@@ -797,6 +819,9 @@ def add_image(
         raise click.ClickException(f"シーン {scene} は存在しません。")
 
     sc = project.scenes[scene]
+
+    # Calculate frame range with auto-detection
+    from_frame, to_frame = _calculate_frame_range(sc, from_frame, to_frame, duration)
 
     # Determine layer
     auto_layer = False
@@ -1965,6 +1990,87 @@ def import_json(json_file: Path, output_file: Path) -> None:
 # =============================================================================
 # ヘルパー関数
 # =============================================================================
+
+
+def _get_media_duration_frames(file_path: str, fps: int) -> int | None:
+    """Get media file duration in frames.
+
+    Args:
+        file_path: Path to media file (video or audio)
+        fps: Project frame rate
+
+    Returns:
+        Duration in frames, or None if unable to detect
+    """
+    try:
+        import cv2
+
+        # Try to open the file with OpenCV
+        cap = cv2.VideoCapture(file_path)
+        if not cap.isOpened():
+            return None
+
+        # Get frame count and FPS from the file
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        file_fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.release()
+
+        if frame_count > 0 and file_fps > 0:
+            # Calculate duration in seconds, then convert to project frames
+            duration_seconds = frame_count / file_fps
+            return int(duration_seconds * fps)
+
+        return None
+    except Exception:
+        return None
+
+
+def _calculate_frame_range(
+    scene: Scene,
+    from_frame: int | None,
+    to_frame: int | None,
+    duration: int | None,
+    media_path: str | None = None,
+) -> tuple[int, int]:
+    """Calculate frame range with auto-detection support.
+
+    Args:
+        scene: Scene object
+        from_frame: Start frame (None for auto)
+        to_frame: End frame (None for auto)
+        duration: Duration in frames (None for auto)
+        media_path: Path to media file for auto-detection (optional)
+
+    Returns:
+        Tuple of (from_frame, to_frame)
+    """
+    # Default duration (60 frames)
+    default_duration = 60
+
+    # Determine start frame
+    if from_frame is None:
+        # Start from the end of existing content, or 0 if empty
+        if scene.objects:
+            from_frame = scene.max_frame + 1
+        else:
+            from_frame = 0
+
+    # Determine end frame
+    if to_frame is None:
+        # Try to auto-detect from media file
+        if media_path and duration is None:
+            detected_duration = _get_media_duration_frames(media_path, scene.fps)
+            if detected_duration:
+                duration = detected_duration
+                safe_echo(f"メディアファイルから長さを自動検出: {duration}フレーム ({duration/scene.fps:.1f}秒)", err=True)
+
+        # Use duration if specified, otherwise use default
+        if duration is not None:
+            to_frame = from_frame + duration - 1
+        else:
+            to_frame = from_frame + default_duration - 1
+
+    return from_frame, to_frame
 
 
 def _find_available_layer(scene: Scene, from_frame: int, to_frame: int) -> int:

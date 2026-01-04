@@ -17,6 +17,7 @@ AviUtl ver.2 uses a text-based project format (.aup2) similar to INI files. This
 - **CLI Tool**: Command-line interface for AI agent automation
 - **Preset System**: Save and reuse animation/effect combinations
 - **Frame Preview**: Render frames to PNG for Vision AI verification
+- **Smart Automation**: Auto frame range, layer selection, and media duration detection
 
 ## Installation
 
@@ -30,9 +31,10 @@ pip install aviutl2-api
 # Create new project
 aviutl2 new project.aup2 --width 1920 --height 1080 --fps 30
 
-# Add objects
-aviutl2 add text project.aup2 "Hello World" --from 0 --to 90
-aviutl2 add shape project.aup2 circle --from 0 --to 90 --size 100
+# Add objects (frame range is optional - defaults to 60 frames, auto-appends)
+aviutl2 add text project.aup2 "Hello World"                    # Auto: frames 0-59
+aviutl2 add shape project.aup2 circle --duration 90            # Auto: frames 60-149
+aviutl2 add text project.aup2 "Manual" --from 0 --to 90        # Manual: frames 0-90
 
 # View timeline
 aviutl2 timeline project.aup2
