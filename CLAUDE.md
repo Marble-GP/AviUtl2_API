@@ -9,13 +9,27 @@ AviUtl ver.2のプロジェクトファイル(.aup2)を操作するためのPyth
 
 **Vision対応LLM連携**: フレームをPNG画像としてレンダリングし、Vision機能を持つLLMが配置確認を自律的に実行できる。
 
-## コマンド
+## インストール
+
+### PyPIから（推奨）
 
 ```bash
-# 開発環境セットアップ
+pip install aviutl2-api
+```
+
+### 開発版
+
+```bash
+git clone https://github.com/Marble-GP/AviUtl2_API.git
+cd AviUtl2_API
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+```
+
+## コマンド
+
+```bash
 
 # テスト実行
 pytest                                          # 全テスト
@@ -460,16 +474,19 @@ AviUtl2は日本語のプロパティ名を使用する。内部名（type, colo
 
 ### 完了済み
 - [x] .aup2ファイルの読み込み・パース
-- [x] Pythonオブジェクトから.aup2への出力
+- [x] Pythonオブジェクトから.aup2への出力（UTF-8, CRLF）
 - [x] ラウンドトリップテスト
 - [x] Project, Scene, TimelineObject, Effect クラス
-- [x] レイヤー衝突検出
+- [x] レイヤー衝突検出・自動解決（`--force`フラグ）
 - [x] フレーム/秒変換ユーティリティ
 - [x] JSON エクスポート/インポート
 - [x] CLIツール実装
 - [x] プリセットシステム（17種類のサンプルプリセット）
 - [x] フレームレンダラー（Vision AI連携用）
 - [x] 画像リサイズ機能（アスペクト比警告、品質警告付き）
+- [x] オブジェクト編集機能（レイヤー、フレーム範囲、エフェクト名）
+- [x] プラットフォーム対応コンソール出力（Windows CP932/Unix UTF-8）
+- [x] PyPI公開（`pip install aviutl2-api`）
 
 ### CLI コマンド一覧
 
@@ -483,7 +500,7 @@ AviUtl2は日本語のプロパティ名を使用する。内部名（type, colo
 | `move` | オブジェクト移動 |
 | `delete` | オブジェクト削除 |
 | `copy` | オブジェクト複製 |
-| `modify` | プロパティ変更 |
+| `modify` | プロパティ変更（座標、レイヤー、フレーム範囲、エフェクト名等）`--force`で衝突自動解決 |
 | `animate` | アニメーション設定 |
 | `filter add` | フィルタ追加 |
 | `preset list/show/apply/save/delete/init` | プリセット管理 |
