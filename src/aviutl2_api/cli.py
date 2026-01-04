@@ -6,6 +6,7 @@ Stateless CLI for AI agent automation. Each command reads/writes files directly.
 from __future__ import annotations
 
 import platform
+import re
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -2433,6 +2434,199 @@ def _print_objects(objects: list[TimelineObject], verbose: bool) -> None:
                     else:
                         val_str = str(val)[:30]
                     safe_echo(f"           {key}: {val_str}")
+
+
+@main.command("batch")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("--filter-type", type=str, default=None, help="オブジェクトタイプでフィルタ（正規表現）")
+@click.option("--filter-text", type=str, default=None, help="テキスト内容でフィルタ（正規表現）")
+@click.option("--filter-layer", type=str, default=None, help="レイヤー範囲でフィルタ（例: 1-5 または 3）")
+@click.option("--x", type=float, default=None, help="X座標を変更")
+@click.option("--y", type=float, default=None, help="Y座標を変更")
+@click.option("--z", type=float, default=None, help="Z座標を変更")
+@click.option("--scale", type=float, default=None, help="拡大率を変更")
+@click.option("--opacity", type=float, default=None, help="透明度を変更（0-100）")
+@click.option("--rotation", type=float, default=None, help="回転角度を変更")
+@click.option("--size", type=float, default=None, help="サイズを変更（テキスト/図形）")
+@click.option("--color", type=str, default=None, help="色を変更（16進数）")
+@click.option("--font", type=str, default=None, help="フォントを変更（テキスト）")
+@click.option("--scene", "-s", type=int, default=0, help="シーン番号")
+@click.option("--dry-run", is_flag=True, help="実行せずマッチするオブジェクトのみ表示")
+@click.option("--output", "-o", type=click.Path(path_type=Path), default=None, help="出力先（省略時は上書き）")
+def batch_modify(
+    file: Path,
+    filter_type: Optional[str],
+    filter_text: Optional[str],
+    filter_layer: Optional[str],
+    x: Optional[float],
+    y: Optional[float],
+    z: Optional[float],
+    scale: Optional[float],
+    opacity: Optional[float],
+    rotation: Optional[float],
+    size: Optional[float],
+    color: Optional[str],
+    font: Optional[str],
+    scene: int,
+    dry_run: bool,
+    output: Optional[Path],
+) -> None:
+    """フィルタ条件に一致する全オブジェクトを一括編集する。
+
+    \b
+    例:
+      # すべてのテキストオブジェクトの色を変更
+      aviutl2 batch project.aup2 --filter-type "テキスト" --color ff0000
+
+      # "Hello"を含むテキストを検索して編集
+      aviutl2 batch project.aup2 --filter-text "Hello.*" --font "MS Gothic"
+
+      # レイヤー1-3のすべてのオブジェクトを移動
+      aviutl2 batch project.aup2 --filter-layer "1-3" --x 100 --y 50
+
+      # ドライラン（マッチするオブジェクトのみ表示）
+      aviutl2 batch project.aup2 --filter-type "図形" --dry-run
+    """
+    project = parse_file(file)
+
+    if scene >= len(project.scenes):
+        raise click.ClickException(f"シーン {scene} は存在しません。")
+
+    sc = project.scenes[scene]
+
+    # Filter objects
+    filtered_objects = []
+    for obj in sc.objects:
+        # Filter by type (regex)
+        if filter_type:
+            try:
+                if not re.search(filter_type, obj.object_type or ""):
+                    continue
+            except re.error as e:
+                raise click.ClickException(f"正規表現エラー (--filter-type): {e}")
+
+        # Filter by text content (regex)
+        if filter_text:
+            text_effect = obj.get_effect("テキスト")
+            if not text_effect:
+                continue
+            text_content = text_effect.properties.get("テキスト", "")
+            try:
+                if not re.search(filter_text, str(text_content)):
+                    continue
+            except re.error as e:
+                raise click.ClickException(f"正規表現エラー (--filter-text): {e}")
+
+        # Filter by layer range
+        if filter_layer:
+            if "-" in filter_layer:
+                try:
+                    start, end = map(int, filter_layer.split("-"))
+                    if not (start <= obj.layer <= end):
+                        continue
+                except ValueError:
+                    raise click.ClickException(f"無効なレイヤー範囲: {filter_layer}")
+            else:
+                try:
+                    layer_num = int(filter_layer)
+                    if obj.layer != layer_num:
+                        continue
+                except ValueError:
+                    raise click.ClickException(f"無効なレイヤー番号: {filter_layer}")
+
+        filtered_objects.append(obj)
+
+    if not filtered_objects:
+        safe_echo("フィルタ条件に一致するオブジェクトがありません。")
+        return
+
+    safe_echo(f"マッチしたオブジェクト: {len(filtered_objects)}件")
+    for obj in filtered_objects:
+        safe_echo(f"  ID {obj.object_id}: {obj.object_type}, レイヤー {obj.layer}, "
+                 f"フレーム {obj.frame_start}-{obj.frame_end}")
+
+    if dry_run:
+        safe_echo("\n--dry-run モードのため、変更は行いません。")
+        return
+
+    # Check if any modification is specified
+    has_modification = any([
+        x is not None, y is not None, z is not None,
+        scale is not None, opacity is not None, rotation is not None,
+        size is not None, color is not None, font is not None
+    ])
+
+    if not has_modification:
+        raise click.ClickException("変更するプロパティを指定してください。")
+
+    # Apply modifications to all filtered objects
+    total_changes = 0
+    for obj in filtered_objects:
+        changes = []
+
+        # Modify drawing properties
+        draw_effect = obj.get_effect("標準描画")
+        if draw_effect:
+            if x is not None:
+                draw_effect.properties["X"] = StaticValue(value=x)
+                changes.append(f"X: {x}")
+            if y is not None:
+                draw_effect.properties["Y"] = StaticValue(value=y)
+                changes.append(f"Y: {y}")
+            if z is not None:
+                draw_effect.properties["Z"] = StaticValue(value=z)
+                changes.append(f"Z: {z}")
+            if scale is not None:
+                draw_effect.properties["拡大率"] = StaticValue(value=scale)
+                changes.append(f"拡大率: {scale}%")
+            if opacity is not None:
+                draw_effect.properties["透明度"] = StaticValue(value=opacity)
+                changes.append(f"透明度: {opacity}%")
+            if rotation is not None:
+                draw_effect.properties["Z軸回転"] = StaticValue(value=rotation)
+                changes.append(f"Z軸回転: {rotation}°")
+
+        # Modify size
+        if size is not None:
+            text_effect = obj.get_effect("テキスト")
+            shape_effect = obj.get_effect("図形")
+            if text_effect:
+                text_effect.properties["サイズ"] = StaticValue(value=size)
+                changes.append(f"フォントサイズ: {size}")
+            elif shape_effect:
+                shape_effect.properties["サイズ"] = StaticValue(value=size)
+                changes.append(f"図形サイズ: {size}")
+
+        # Modify color
+        if color is not None:
+            text_effect = obj.get_effect("テキスト")
+            shape_effect = obj.get_effect("図形")
+            if text_effect:
+                text_effect.properties["文字色"] = color
+                changes.append(f"文字色: #{color}")
+            elif shape_effect:
+                shape_effect.properties["色"] = color
+                changes.append(f"色: #{color}")
+
+        # Modify font
+        if font is not None:
+            text_effect = obj.get_effect("テキスト")
+            if text_effect:
+                text_effect.properties["フォント"] = font
+                changes.append(f"フォント: {font}")
+
+        if changes:
+            total_changes += 1
+            safe_echo(f"\nID {obj.object_id} を変更:")
+            for change in changes:
+                safe_echo(f"  {change}")
+
+    # Save
+    save_path = output or file
+    serialize_to_file(project, save_path)
+
+    safe_echo(f"\n{total_changes}個のオブジェクトを変更しました。")
+    safe_echo(f"保存先: {save_path}")
 
 
 if __name__ == "__main__":

@@ -51,6 +51,7 @@ pip install -e .
 | `delete` | オブジェクト削除 |
 | `copy` | オブジェクト複製 |
 | `modify` | オブジェクトプロパティ変更 |
+| `batch` | 一括編集（フィルタ機能付き） |
 | `animate` | アニメーション設定 |
 | `filter` | フィルタエフェクト操作 |
 | `preset` | プリセット管理 |
@@ -573,6 +574,75 @@ aviutl2 modify project.aup2 0 --from 30 --to 120
 
 # エフェクト名を変更
 aviutl2 modify project.aup2 0 --effect-name "画像ファイル"
+```
+
+---
+
+### batch - 一括編集（フィルタ機能付き）
+
+```bash
+aviutl2 batch <file.aup2> [FILTER_OPTIONS] [MODIFY_OPTIONS]
+```
+
+フィルタ条件に一致する複数のオブジェクトを一括で編集します。正規表現による柔軟なフィルタリングが可能です。
+
+**フィルタオプション:**
+| オプション | 説明 |
+|-----------|------|
+| `--filter-type` | オブジェクトタイプでフィルタ（正規表現） |
+| `--filter-text` | テキスト内容でフィルタ（正規表現） |
+| `--filter-layer` | レイヤー範囲でフィルタ（例: `1-5` または `3`） |
+| `--dry-run` | 実行せずマッチするオブジェクトのみ表示 |
+
+**変更オプション (modifyコマンドと同じ):**
+| オプション | 説明 |
+|-----------|------|
+| `--x` | X座標を変更 |
+| `--y` | Y座標を変更 |
+| `--z` | Z座標を変更 |
+| `--scale` | 拡大率を変更 |
+| `--opacity` | 透明度を変更（0-100） |
+| `--rotation` | 回転角度を変更 |
+| `--size` | サイズを変更（テキスト/図形） |
+| `--color` | 色を変更（16進数） |
+| `--font` | フォントを変更（テキスト） |
+| `-s, --scene` | シーン番号 |
+| `-o, --output` | 出力先 |
+
+**例:**
+```bash
+# すべてのテキストオブジェクトの色を赤に変更
+aviutl2 batch project.aup2 --filter-type "テキスト" --color ff0000
+
+# "Hello"を含むテキストのフォントを変更
+aviutl2 batch project.aup2 --filter-text "Hello.*" --font "MS Gothic"
+
+# レイヤー1-3のすべてのオブジェクトを移動
+aviutl2 batch project.aup2 --filter-layer "1-3" --x 100 --y 50
+
+# すべての図形の透明度を50%に設定
+aviutl2 batch project.aup2 --filter-type "図形" --opacity 50
+
+# 複数条件を組み合わせ: レイヤー2-5のテキストのみ
+aviutl2 batch project.aup2 --filter-type "テキスト" --filter-layer "2-5" --size 40
+
+# ドライラン（マッチするオブジェクトを確認）
+aviutl2 batch project.aup2 --filter-text "World" --dry-run
+```
+
+**正規表現の例:**
+```bash
+# "Hello"で始まるテキスト
+--filter-text "^Hello"
+
+# "World"で終わるテキスト
+--filter-text "World$"
+
+# "test"または"demo"を含むテキスト
+--filter-text "(test|demo)"
+
+# 数字を含むテキスト
+--filter-text ".*[0-9].*"
 ```
 
 ---

@@ -50,6 +50,10 @@ aviutl2 animate project.aup2 0 opacity --start 0 --end 100 --motion smooth
 
 # Add filter
 aviutl2 filter add project.aup2 0 blur --strength 10
+
+# Batch edit (regex filtering)
+aviutl2 batch project.aup2 --filter-text "Hello.*" --color ff0000  # Change all "Hello" texts to red
+aviutl2 batch project.aup2 --filter-layer "1-5" --opacity 50       # Set opacity for layers 1-5
 ```
 
 ## Python API
@@ -101,6 +105,7 @@ json_data = to_json(project)
 | `delete` | Delete object |
 | `copy` | Duplicate object |
 | `modify` | Change object properties |
+| `batch` | Batch edit with filters (regex) |
 
 ### Animation & Effects
 
