@@ -6,6 +6,7 @@ Stateless CLI for AI agent automation. Each command reads/writes files directly.
 from __future__ import annotations
 
 import platform
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,6 +23,35 @@ from aviutl2_api import (
 )
 from aviutl2_api.models import Effect
 from aviutl2_api.models.values import AnimatedValue, StaticValue
+
+
+def safe_echo(message: str, err: bool = False) -> None:
+    """Platform-aware echo that handles console encoding properly.
+
+    Windows environments often use CP932 (Shift_JIS) encoding in console,
+    while Unix-like systems use UTF-8. This function detects the platform
+    and uses appropriate encoding to prevent mojibake (文字化け).
+
+    Args:
+        message: Message to print
+        err: If True, write to stderr instead of stdout
+    """
+    if platform.system() == "Windows":
+        # Windows: Use console's native encoding (typically cp932)
+        try:
+            encoding = sys.stdout.encoding if not err else sys.stderr.encoding
+            if encoding is None:
+                encoding = 'cp932'  # Fallback to cp932
+
+            stream = sys.stderr if err else sys.stdout
+            stream.buffer.write((message + '\n').encode(encoding, errors='replace'))
+            stream.buffer.flush()
+        except Exception:
+            # Fallback to click.echo if something goes wrong
+            click.echo(message, err=err)
+    else:
+        # Unix/Linux/Mac: UTF-8 (click handles this well)
+        click.echo(message, err=err)
 
 
 @click.group()
@@ -70,8 +100,8 @@ def new_project(output_file: Path, width: int, height: int, fps: int, audio_rate
     # Save
     serialize_to_file(project, output_file)
 
-    click.echo(f"新規プロジェクト作成: {width}x{height} @ {fps}fps")
-    click.echo(f"  保存先: {output_file}")
+    safe_echo(f"新規プロジェクト作成: {width}x{height} @ {fps}fps")
+    safe_echo(f"  保存先: {output_file}")
 
 
 @main.command()
@@ -180,7 +210,7 @@ def search(file: Path, at_frame: int, scene: int) -> None:
     sc = project.scenes[scene]
     objs = sc.get_objects_at_frame(at_frame)
 
-    click.echo(f"フレーム {at_frame} のオブジェクト ({len(objs)}件):")
+    safe_echo(f"フレーム {at_frame} のオブジェクト ({len(objs)}件):")
     _print_objects(objs, verbose=False)
 
 
@@ -210,7 +240,7 @@ def range_search(file: Path, from_frame: int, to_frame: int, obj_type: Optional[
     # Sort by start frame
     objs.sort(key=lambda o: (o.frame_start, o.layer))
 
-    click.echo(f"区間 {from_frame}-{to_frame} のオブジェクト ({len(objs)}件):")
+    safe_echo(f"区間 {from_frame}-{to_frame} のオブジェクト ({len(objs)}件):")
     _print_objects(objs, verbose=verbose)
 
 
@@ -239,11 +269,11 @@ def check(file: Path, at_frame: int, to_frame: int, layer: int, scene: int) -> N
             conflicts.append(obj)
 
     if conflicts:
-        click.echo(f"配置不可: レイヤー {layer} フレーム {at_frame}-{to_frame} には衝突があります:")
+        safe_echo(f"配置不可: レイヤー {layer} フレーム {at_frame}-{to_frame} には衝突があります:")
         for obj in conflicts:
-            click.echo(f"  - ID {obj.object_id}: {obj.object_type} (フレーム {obj.frame_start}-{obj.frame_end})")
+            safe_echo(f"  - ID {obj.object_id}: {obj.object_type} (フレーム {obj.frame_start}-{obj.frame_end})")
     else:
-        click.echo(f"配置可能: レイヤー {layer} フレーム {at_frame}-{to_frame}")
+        safe_echo(f"配置可能: レイヤー {layer} フレーム {at_frame}-{to_frame}")
 
 
 # =============================================================================
@@ -313,7 +343,7 @@ def add_text(
     if warn_overlap:
         warnings = _check_overlap_warnings(sc, from_frame, to_frame, "テキスト", {"テキスト"})
         for w in warnings:
-            click.echo(w, err=True)
+            safe_echo(w, err=True)
 
     # Generate new object ID
     new_id = max((o.object_id for o in sc.objects), default=-1) + 1
@@ -380,9 +410,9 @@ def add_text(
     serialize_to_file(project, save_path)
 
     layer_info = f"レイヤー {actual_layer}" + (" (auto)" if auto_layer else "")
-    click.echo(f"テキスト追加: ID {new_id}, {layer_info}, フレーム {from_frame}-{to_frame}")
-    click.echo(f"  内容: {content}")
-    click.echo(f"  保存先: {save_path}")
+    safe_echo(f"テキスト追加: ID {new_id}, {layer_info}, フレーム {from_frame}-{to_frame}")
+    safe_echo(f"  内容: {content}")
+    safe_echo(f"  保存先: {save_path}")
 
 
 @add.command("shape")
@@ -443,7 +473,7 @@ def add_shape(
     if warn_overlap:
         warnings = _check_overlap_warnings(sc, from_frame, to_frame, "図形", {"図形"})
         for w in warnings:
-            click.echo(w, err=True)
+            safe_echo(w, err=True)
 
     # Map shape type to Japanese name and type value
     shape_map = {
@@ -516,8 +546,8 @@ def add_shape(
     serialize_to_file(project, save_path)
 
     layer_info = f"レイヤー {actual_layer}" + (" (auto)" if auto_layer else "")
-    click.echo(f"図形追加: ID {new_id}, {shape_name}, {layer_info}, フレーム {from_frame}-{to_frame}")
-    click.echo(f"  保存先: {save_path}")
+    safe_echo(f"図形追加: ID {new_id}, {shape_name}, {layer_info}, フレーム {from_frame}-{to_frame}")
+    safe_echo(f"  保存先: {save_path}")
 
 
 @add.command("audio")
@@ -572,7 +602,7 @@ def add_audio(
     if warn_overlap:
         warnings = _check_overlap_warnings(sc, from_frame, to_frame, "音声ファイル", {"音声ファイル"})
         for w in warnings:
-            click.echo(w, err=True)
+            safe_echo(w, err=True)
 
     # Generate new object ID
     new_id = max((o.object_id for o in sc.objects), default=-1) + 1
@@ -616,9 +646,9 @@ def add_audio(
     serialize_to_file(project, save_path)
 
     layer_info = f"レイヤー {actual_layer}" + (" (auto)" if auto_layer else "")
-    click.echo(f"音声追加: ID {new_id}, {layer_info}, フレーム {from_frame}-{to_frame}")
-    click.echo(f"  ファイル: {audio_path}")
-    click.echo(f"  保存先: {save_path}")
+    safe_echo(f"音声追加: ID {new_id}, {layer_info}, フレーム {from_frame}-{to_frame}")
+    safe_echo(f"  ファイル: {audio_path}")
+    safe_echo(f"  保存先: {save_path}")
 
 
 @add.command("video")
@@ -675,7 +705,7 @@ def add_video(
     if warn_overlap:
         warnings = _check_overlap_warnings(sc, from_frame, to_frame, "動画ファイル", {"動画ファイル"})
         for w in warnings:
-            click.echo(w, err=True)
+            safe_echo(w, err=True)
 
     # Generate new object ID
     new_id = max((o.object_id for o in sc.objects), default=-1) + 1
@@ -731,9 +761,9 @@ def add_video(
     serialize_to_file(project, save_path)
 
     layer_info = f"レイヤー {actual_layer}" + (" (auto)" if auto_layer else "")
-    click.echo(f"動画追加: ID {new_id}, {layer_info}, フレーム {from_frame}-{to_frame}")
-    click.echo(f"  ファイル: {video_path}")
-    click.echo(f"  保存先: {save_path}")
+    safe_echo(f"動画追加: ID {new_id}, {layer_info}, フレーム {from_frame}-{to_frame}")
+    safe_echo(f"  ファイル: {video_path}")
+    safe_echo(f"  保存先: {save_path}")
 
 
 @add.command("image")
@@ -790,7 +820,7 @@ def add_image(
     if warn_overlap:
         warnings = _check_overlap_warnings(sc, from_frame, to_frame, "画像ファイル", {"画像ファイル"})
         for w in warnings:
-            click.echo(w, err=True)
+            safe_echo(w, err=True)
 
     # Generate new object ID
     new_id = max((o.object_id for o in sc.objects), default=-1) + 1
@@ -842,9 +872,9 @@ def add_image(
     serialize_to_file(project, save_path)
 
     layer_info = f"レイヤー {actual_layer}" + (" (auto)" if auto_layer else "")
-    click.echo(f"画像追加: ID {new_id}, {layer_info}, フレーム {from_frame}-{to_frame}")
-    click.echo(f"  ファイル: {image_path}")
-    click.echo(f"  保存先: {save_path}")
+    safe_echo(f"画像追加: ID {new_id}, {layer_info}, フレーム {from_frame}-{to_frame}")
+    safe_echo(f"  ファイル: {image_path}")
+    safe_echo(f"  保存先: {save_path}")
 
 
 @main.command("move")
@@ -907,10 +937,10 @@ def move_object(
     save_path = output or file
     serialize_to_file(project, save_path)
 
-    click.echo(f"オブジェクト {object_id} を移動:")
-    click.echo(f"  レイヤー: {old_layer} -> {new_layer}")
-    click.echo(f"  フレーム: {old_start}-{old_end} -> {new_start}-{new_end}")
-    click.echo(f"  保存先: {save_path}")
+    safe_echo(f"オブジェクト {object_id} を移動:")
+    safe_echo(f"  レイヤー: {old_layer} -> {new_layer}")
+    safe_echo(f"  フレーム: {old_start}-{old_end} -> {new_start}-{new_end}")
+    safe_echo(f"  保存先: {save_path}")
 
 
 @main.command("delete")
@@ -941,10 +971,10 @@ def delete_object(file: Path, object_id: int, scene: int, yes: bool, output: Opt
     obj = sc.objects[obj_index]
 
     if not yes:
-        click.echo(f"削除対象: ID {obj.object_id}, {obj.object_type}, "
+        safe_echo(f"削除対象: ID {obj.object_id}, {obj.object_type}, "
                    f"レイヤー {obj.layer}, フレーム {obj.frame_start}-{obj.frame_end}")
         if not click.confirm("本当に削除しますか？"):
-            click.echo("キャンセルしました。")
+            safe_echo("キャンセルしました。")
             return
 
     sc.objects.pop(obj_index)
@@ -953,8 +983,8 @@ def delete_object(file: Path, object_id: int, scene: int, yes: bool, output: Opt
     save_path = output or file
     serialize_to_file(project, save_path)
 
-    click.echo(f"オブジェクト {object_id} を削除しました。")
-    click.echo(f"  保存先: {save_path}")
+    safe_echo(f"オブジェクト {object_id} を削除しました。")
+    safe_echo(f"  保存先: {save_path}")
 
 
 @main.command("modify")
@@ -1116,13 +1146,13 @@ def modify_object(
                 for moved_id, old_l, new_l in movements:
                     moved_obj = next((o for o in sc.objects if o.object_id == moved_id), None)
                     obj_type = moved_obj.object_type if moved_obj else "不明"
-                    click.echo(f"  オブジェクト {moved_id} ({obj_type}) をレイヤー {old_l} → {new_l} に移動", err=True)
+                    safe_echo(f"  オブジェクト {moved_id} ({obj_type}) をレイヤー {old_l} → {new_l} に移動", err=True)
             except RuntimeError as e:
                 raise click.ClickException(str(e))
         elif collisions:
             # Non-force mode: just warn
             for other_obj in collisions:
-                click.echo(f"警告: レイヤー {layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
+                safe_echo(f"警告: レイヤー {layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
                          f"オブジェクト {other_obj.object_id} ({other_obj.object_type}) が存在します。", err=True)
 
         obj.layer = layer
@@ -1149,13 +1179,13 @@ def modify_object(
                     for moved_id, old_l, new_l in movements:
                         moved_obj = next((o for o in sc.objects if o.object_id == moved_id), None)
                         obj_type = moved_obj.object_type if moved_obj else "不明"
-                        click.echo(f"  オブジェクト {moved_id} ({obj_type}) をレイヤー {old_l} → {new_l} に移動", err=True)
+                        safe_echo(f"  オブジェクト {moved_id} ({obj_type}) をレイヤー {old_l} → {new_l} に移動", err=True)
                 except RuntimeError as e:
                     raise click.ClickException(str(e))
             elif collisions:
                 # Non-force mode: just warn
                 for other_obj in collisions:
-                    click.echo(f"警告: レイヤー {target_layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
+                    safe_echo(f"警告: レイヤー {target_layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
                              f"オブジェクト {other_obj.object_id} ({other_obj.object_type}) が存在します。", err=True)
 
         if frame_from is not None:
@@ -1182,10 +1212,10 @@ def modify_object(
     save_path = output or file
     serialize_to_file(project, save_path)
 
-    click.echo(f"オブジェクト {object_id} を変更:")
+    safe_echo(f"オブジェクト {object_id} を変更:")
     for change in changes:
-        click.echo(f"  {change}")
-    click.echo(f"  保存先: {save_path}")
+        safe_echo(f"  {change}")
+    safe_echo(f"  保存先: {save_path}")
 
 
 @main.command("copy")
@@ -1291,9 +1321,9 @@ def copy_object(
     serialize_to_file(project, save_path)
 
     layer_info = f"レイヤー {actual_layer}" + (" (auto)" if auto_layer else "")
-    click.echo(f"オブジェクト複製: ID {object_id} -> ID {new_id}")
-    click.echo(f"  {layer_info}, フレーム {new_start}-{new_end}")
-    click.echo(f"  保存先: {save_path}")
+    safe_echo(f"オブジェクト複製: ID {object_id} -> ID {new_id}")
+    safe_echo(f"  {layer_info}, フレーム {new_start}-{new_end}")
+    safe_echo(f"  保存先: {save_path}")
 
 
 # =============================================================================
@@ -1467,12 +1497,12 @@ def filter_add(
     save_path = output or file
     serialize_to_file(project, save_path)
 
-    click.echo(f"フィルタ追加: オブジェクト {object_id} に {filter_name}")
+    safe_echo(f"フィルタ追加: オブジェクト {object_id} に {filter_name}")
     if strength:
-        click.echo(f"  強度: {strength}")
+        safe_echo(f"  強度: {strength}")
     if color:
-        click.echo(f"  色: #{color}")
-    click.echo(f"  保存先: {save_path}")
+        safe_echo(f"  色: #{color}")
+    safe_echo(f"  保存先: {save_path}")
 
 
 @main.command("animate")
@@ -1583,11 +1613,11 @@ def animate_property(
     save_path = output or file
     serialize_to_file(project, save_path)
 
-    click.echo(f"アニメーション設定: オブジェクト {object_id}")
-    click.echo(f"  プロパティ: {prop_key}")
-    click.echo(f"  値: {start} → {end}")
-    click.echo(f"  移動タイプ: {motion_type}")
-    click.echo(f"  保存先: {save_path}")
+    safe_echo(f"アニメーション設定: オブジェクト {object_id}")
+    safe_echo(f"  プロパティ: {prop_key}")
+    safe_echo(f"  値: {start} → {end}")
+    safe_echo(f"  移動タイプ: {motion_type}")
+    safe_echo(f"  保存先: {save_path}")
 
 
 # =============================================================================
@@ -1610,12 +1640,12 @@ def preset_list() -> None:
     presets = manager.list_presets()
 
     if not presets:
-        click.echo("プリセットが登録されていません。")
-        click.echo("  'aviutl2 preset init' でサンプルプリセットを追加できます。")
+        safe_echo("プリセットが登録されていません。")
+        safe_echo("  'aviutl2 preset init' でサンプルプリセットを追加できます。")
         return
 
-    click.echo(f"登録済みプリセット ({len(presets)}件):")
-    click.echo("-" * 60)
+    safe_echo(f"登録済みプリセット ({len(presets)}件):")
+    safe_echo("-" * 60)
 
     for p in presets:
         anim_count = len(p.animations)
@@ -1627,7 +1657,7 @@ def preset_list() -> None:
             contents.append(f"エフェクト:{effect_count}")
         contents_str = ", ".join(contents) if contents else "空"
 
-        click.echo(f"  {p.id:20s} {p.name:16s} [{contents_str}]")
+        safe_echo(f"  {p.id:20s} {p.name:16s} [{contents_str}]")
 
 
 @preset.command("show")
@@ -1642,21 +1672,21 @@ def preset_show(preset_id: str) -> None:
     if p is None:
         raise click.ClickException(f"プリセット '{preset_id}' が見つかりません。")
 
-    click.echo(f"=== プリセット: {p.name} ===")
-    click.echo(f"ID: {p.id}")
-    click.echo(f"説明: {p.description or '(なし)'}")
+    safe_echo(f"=== プリセット: {p.name} ===")
+    safe_echo(f"ID: {p.id}")
+    safe_echo(f"説明: {p.description or '(なし)'}")
 
     if p.animations:
-        click.echo(f"\nアニメーション ({len(p.animations)}件):")
+        safe_echo(f"\nアニメーション ({len(p.animations)}件):")
         for anim in p.animations:
-            click.echo(f"  {anim.property}: {anim.start} → {anim.end} ({anim.motion})")
+            safe_echo(f"  {anim.property}: {anim.start} → {anim.end} ({anim.motion})")
 
     if p.effects:
-        click.echo(f"\nエフェクト ({len(p.effects)}件):")
+        safe_echo(f"\nエフェクト ({len(p.effects)}件):")
         for eff in p.effects:
-            click.echo(f"  {eff.name}:")
+            safe_echo(f"  {eff.name}:")
             for key, val in eff.properties.items():
-                click.echo(f"    {key}: {val}")
+                safe_echo(f"    {key}: {val}")
 
 
 @preset.command("apply")
@@ -1748,10 +1778,10 @@ def preset_apply(file: Path, object_id: int, preset_id: str, scene: int, output:
     save_path = output or file
     serialize_to_file(project, save_path)
 
-    click.echo(f"プリセット '{p.name}' を適用: オブジェクト {object_id}")
+    safe_echo(f"プリセット '{p.name}' を適用: オブジェクト {object_id}")
     for item in applied:
-        click.echo(f"  {item}")
-    click.echo(f"  保存先: {save_path}")
+        safe_echo(f"  {item}")
+    safe_echo(f"  保存先: {save_path}")
 
 
 @preset.command("save")
@@ -1835,13 +1865,13 @@ def preset_save(file: Path, object_id: int, preset_id: str, name: Optional[str],
     manager = PresetManager()
     manager.add_preset(new_preset)
 
-    click.echo(f"プリセット保存: '{preset_id}'")
-    click.echo(f"  名前: {new_preset.name}")
+    safe_echo(f"プリセット保存: '{preset_id}'")
+    safe_echo(f"  名前: {new_preset.name}")
     if animations:
-        click.echo(f"  アニメーション: {len(animations)}件")
+        safe_echo(f"  アニメーション: {len(animations)}件")
     if effects:
-        click.echo(f"  エフェクト: {len(effects)}件")
-    click.echo(f"  保存先: {manager.preset_path}")
+        safe_echo(f"  エフェクト: {len(effects)}件")
+    safe_echo(f"  保存先: {manager.preset_path}")
 
 
 @preset.command("delete")
@@ -1858,13 +1888,13 @@ def preset_delete(preset_id: str, yes: bool) -> None:
         raise click.ClickException(f"プリセット '{preset_id}' が見つかりません。")
 
     if not yes:
-        click.echo(f"削除対象: {p.id} ({p.name})")
+        safe_echo(f"削除対象: {p.id} ({p.name})")
         if not click.confirm("本当に削除しますか？"):
-            click.echo("キャンセルしました。")
+            safe_echo("キャンセルしました。")
             return
 
     manager.delete_preset(preset_id)
-    click.echo(f"プリセット '{preset_id}' を削除しました。")
+    safe_echo(f"プリセット '{preset_id}' を削除しました。")
 
 
 @preset.command("init")
@@ -1876,11 +1906,11 @@ def preset_init() -> None:
     added = manager.init_with_samples()
 
     if added > 0:
-        click.echo(f"サンプルプリセット {added}件 を追加しました。")
-        click.echo(f"  保存先: {manager.preset_path}")
-        click.echo("\n'aviutl2 preset list' で一覧を確認できます。")
+        safe_echo(f"サンプルプリセット {added}件 を追加しました。")
+        safe_echo(f"  保存先: {manager.preset_path}")
+        safe_echo("\n'aviutl2 preset list' で一覧を確認できます。")
     else:
-        click.echo("すべてのサンプルプリセットは既に登録済みです。")
+        safe_echo("すべてのサンプルプリセットは既に登録済みです。")
 
 
 # =============================================================================
@@ -1899,7 +1929,7 @@ def export_json(file: Path, output_file: Path, indent: int) -> None:
     try:
         json_str = to_json(project, indent=indent)
         output_file.write_text(json_str, encoding="utf-8")
-        click.echo(f"JSON出力: {output_file}")
+        safe_echo(f"JSON出力: {output_file}")
     except Exception as e:
         raise click.ClickException(f"エクスポートエラー: {e}")
 
@@ -1913,8 +1943,8 @@ def import_json(json_file: Path, output_file: Path) -> None:
         json_str = json_file.read_text(encoding="utf-8")
         project = from_json(json_str)
         serialize_to_file(project, output_file)
-        click.echo(f"JSONインポート完了: {json_file}")
-        click.echo(f"  出力先: {output_file}")
+        safe_echo(f"JSONインポート完了: {json_file}")
+        safe_echo(f"  出力先: {output_file}")
         _print_project_summary(project)
     except Exception as e:
         raise click.ClickException(f"インポートエラー: {e}")
@@ -1980,35 +2010,35 @@ def _check_overlap_warnings(
 
 def _print_project_summary(project: Project) -> None:
     """Print brief project summary."""
-    click.echo(f"  バージョン: {project.version}")
-    click.echo(f"  シーン数: {len(project.scenes)}")
+    safe_echo(f"  バージョン: {project.version}")
+    safe_echo(f"  シーン数: {len(project.scenes)}")
     if project.scenes:
         sc = project.scenes[0]
-        click.echo(f"  解像度: {sc.width}x{sc.height} @ {sc.fps}fps")
-        click.echo(f"  オブジェクト数: {len(sc.objects)}")
+        safe_echo(f"  解像度: {sc.width}x{sc.height} @ {sc.fps}fps")
+        safe_echo(f"  オブジェクト数: {len(sc.objects)}")
 
 
 def _print_project_info(project: Project, file_path: Optional[Path], modified: bool) -> None:
     """Print detailed project info."""
-    click.echo("=== プロジェクト情報 ===")
+    safe_echo("=== プロジェクト情報 ===")
     if file_path:
         status = " (変更あり)" if modified else ""
-        click.echo(f"ファイル: {file_path}{status}")
+        safe_echo(f"ファイル: {file_path}{status}")
     else:
-        click.echo("ファイル: (未保存)")
+        safe_echo("ファイル: (未保存)")
 
-    click.echo(f"バージョン: {project.version}")
-    click.echo(f"シーン数: {len(project.scenes)}")
+    safe_echo(f"バージョン: {project.version}")
+    safe_echo(f"シーン数: {len(project.scenes)}")
 
     for i, sc in enumerate(project.scenes):
-        click.echo(f"\n--- シーン {i}: {sc.name} ---")
-        click.echo(f"  解像度: {sc.width}x{sc.height}")
-        click.echo(f"  フレームレート: {sc.fps}fps")
-        click.echo(f"  音声レート: {sc.audio_rate}Hz")
-        click.echo(f"  オブジェクト数: {len(sc.objects)}")
+        safe_echo(f"\n--- シーン {i}: {sc.name} ---")
+        safe_echo(f"  解像度: {sc.width}x{sc.height}")
+        safe_echo(f"  フレームレート: {sc.fps}fps")
+        safe_echo(f"  音声レート: {sc.audio_rate}Hz")
+        safe_echo(f"  オブジェクト数: {len(sc.objects)}")
         if sc.objects:
             max_frame = sc.max_frame or 0
-            click.echo(f"  最大フレーム: {max_frame} ({max_frame / sc.fps:.2f}秒)")
+            safe_echo(f"  最大フレーム: {max_frame} ({max_frame / sc.fps:.2f}秒)")
 
 
 def _parse_layer_filter(layer_str: Optional[str]) -> Optional[set[int]]:
@@ -2063,7 +2093,7 @@ def _print_timeline(
         layer_set = layer_set.intersection(layer_filter)
 
     if not layer_set:
-        click.echo("オブジェクトがありません。")
+        safe_echo("オブジェクトがありません。")
         return
 
     layers = sorted(layer_set)
@@ -2146,8 +2176,8 @@ def _print_timeline(
     if layer_filter:
         filter_info = f" (レイヤー: {','.join(map(str, sorted(layer_filter)))})"
 
-    click.echo(f"タイムライン: フレーム {from_frame} - {to_frame}{filter_info}")
-    click.echo("=" * width)
+    safe_echo(f"タイムライン: フレーム {from_frame} - {to_frame}{filter_info}")
+    safe_echo("=" * width)
 
     # Header with frame numbers
     header = " " * label_width + "|"
@@ -2157,17 +2187,17 @@ def _print_timeline(
             header += f"{frame:<10}"[:10]
     else:
         header += f"{from_frame}...{to_frame}"
-    click.echo(header[:width])
-    click.echo("-" * width)
+    safe_echo(header[:width])
+    safe_echo("-" * width)
 
     # Print each layer
     for layer in layers:
         label = f"L{layer:02d}    "[:label_width]
         line_str = "".join(layer_lines[layer])[:width - label_width - 1]
-        click.echo(f"{label}|{line_str}")
+        safe_echo(f"{label}|{line_str}")
 
-    click.echo("=" * width)
-    click.echo("凡例: 動=動画 画=画像 音=音声 図=図形 テ=テキスト")
+    safe_echo("=" * width)
+    safe_echo("凡例: 動=動画 画=画像 音=音声 図=図形 テ=テキスト")
 
 
 # =============================================================================
@@ -2267,22 +2297,22 @@ def preview(
         # リサイズ適用
         final_buffer, resize_warnings = apply_resize(result.buffer)
         for w in resize_warnings:
-            click.echo(w, err=True)
+            safe_echo(w, err=True)
 
         output.parent.mkdir(parents=True, exist_ok=True)
         final_buffer.save(output)
 
-        click.echo(f"フィルムストリップ生成: {output}")
-        click.echo(f"  フレーム: 0 - {max_frame_num} (間隔: {interval})")
+        safe_echo(f"フィルムストリップ生成: {output}")
+        safe_echo(f"  フレーム: 0 - {max_frame_num} (間隔: {interval})")
         if needs_resize:
-            click.echo(f"  出力解像度: {final_buffer.width}x{final_buffer.height}")
-        click.echo(f"  レンダリング時間: {result.render_time_ms:.1f}ms")
+            safe_echo(f"  出力解像度: {final_buffer.width}x{final_buffer.height}")
+        safe_echo(f"  レンダリング時間: {result.render_time_ms:.1f}ms")
 
         if result.warnings:
             for w in result.warnings:
-                click.echo(f"  警告: {w}", err=True)
+                safe_echo(f"  警告: {w}", err=True)
         if result.missing_media:
-            click.echo(f"  欠落ファイル: {len(result.missing_media)}件", err=True)
+            safe_echo(f"  欠落ファイル: {len(result.missing_media)}件", err=True)
 
     elif frames:
         # Multiple frames mode
@@ -2297,7 +2327,7 @@ def preview(
             # リサイズ適用
             final_buffer, resize_warnings = apply_resize(result.buffer)
             for w in resize_warnings:
-                click.echo(w, err=True)
+                safe_echo(w, err=True)
 
             out_path = output / f"frame_{f:05d}.png"
             final_buffer.save(out_path)
@@ -2305,12 +2335,12 @@ def preview(
 
             if result.warnings:
                 for w in result.warnings:
-                    click.echo(f"フレーム {f} 警告: {w}", err=True)
+                    safe_echo(f"フレーム {f} 警告: {w}", err=True)
 
-        click.echo(f"{len(frame_list)}フレームをレンダリング: {output}/")
+        safe_echo(f"{len(frame_list)}フレームをレンダリング: {output}/")
         if needs_resize:
-            click.echo(f"  出力解像度: {final_buffer.width}x{final_buffer.height}")
-        click.echo(f"  合計時間: {total_time:.1f}ms")
+            safe_echo(f"  出力解像度: {final_buffer.width}x{final_buffer.height}")
+        safe_echo(f"  合計時間: {total_time:.1f}ms")
 
     else:
         # Single frame mode
@@ -2319,24 +2349,24 @@ def preview(
         # リサイズ適用
         final_buffer, resize_warnings = apply_resize(result.buffer)
         for w in resize_warnings:
-            click.echo(w, err=True)
+            safe_echo(w, err=True)
 
         output.parent.mkdir(parents=True, exist_ok=True)
         final_buffer.save(output)
 
-        click.echo(f"フレーム {frame} をレンダリング: {output}")
+        safe_echo(f"フレーム {frame} をレンダリング: {output}")
         if needs_resize:
-            click.echo(f"  元解像度: {sc.width}x{sc.height}")
-            click.echo(f"  出力解像度: {final_buffer.width}x{final_buffer.height}")
+            safe_echo(f"  元解像度: {sc.width}x{sc.height}")
+            safe_echo(f"  出力解像度: {final_buffer.width}x{final_buffer.height}")
         else:
-            click.echo(f"  解像度: {sc.width}x{sc.height}")
-        click.echo(f"  レンダリング時間: {result.render_time_ms:.1f}ms")
+            safe_echo(f"  解像度: {sc.width}x{sc.height}")
+        safe_echo(f"  レンダリング時間: {result.render_time_ms:.1f}ms")
 
         if result.warnings:
             for w in result.warnings:
-                click.echo(f"  警告: {w}", err=True)
+                safe_echo(f"  警告: {w}", err=True)
         if result.missing_media:
-            click.echo(f"  欠落ファイル: {len(result.missing_media)}件", err=True)
+            safe_echo(f"  欠落ファイル: {len(result.missing_media)}件", err=True)
 
 
 # =============================================================================
@@ -2353,11 +2383,11 @@ def _print_layers(scene: Scene) -> None:
         layer_map[obj.layer].append(obj)
 
     if not layer_map:
-        click.echo("オブジェクトがありません。")
+        safe_echo("オブジェクトがありません。")
         return
 
-    click.echo(f"レイヤー一覧 (使用中: {len(layer_map)}レイヤー)")
-    click.echo("-" * 50)
+    safe_echo(f"レイヤー一覧 (使用中: {len(layer_map)}レイヤー)")
+    safe_echo("-" * 50)
 
     for layer in sorted(layer_map.keys()):
         objs = layer_map[layer]
@@ -2367,23 +2397,23 @@ def _print_layers(scene: Scene) -> None:
             types[t] = types.get(t, 0) + 1
 
         type_str = ", ".join(f"{t}:{c}" for t, c in types.items())
-        click.echo(f"  レイヤー {layer:3d}: {len(objs)}個 ({type_str})")
+        safe_echo(f"  レイヤー {layer:3d}: {len(objs)}個 ({type_str})")
 
 
 def _print_objects(objects: list[TimelineObject], verbose: bool) -> None:
     """Print object list."""
     if not objects:
-        click.echo("  (なし)")
+        safe_echo("  (なし)")
         return
 
     for obj in objects:
         line = (f"  ID {obj.object_id:3d}: {obj.object_type or '不明':8s} "
                 f"レイヤー {obj.layer:2d} フレーム {obj.frame_start:5d}-{obj.frame_end:5d}")
-        click.echo(line)
+        safe_echo(line)
 
         if verbose:
             for eff in obj.effects:
-                click.echo(f"         エフェクト: {eff.name}")
+                safe_echo(f"         エフェクト: {eff.name}")
                 for key, val in eff.properties.items():
                     if isinstance(val, AnimatedValue):
                         val_str = f"{val.start} -> {val.end} ({val.animation.motion_type})"
@@ -2391,7 +2421,7 @@ def _print_objects(objects: list[TimelineObject], verbose: bool) -> None:
                         val_str = str(val.value)
                     else:
                         val_str = str(val)[:30]
-                    click.echo(f"           {key}: {val_str}")
+                    safe_echo(f"           {key}: {val_str}")
 
 
 if __name__ == "__main__":
