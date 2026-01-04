@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aviutl2-api"
-version = "0.1.1"
+version = "0.1.2"
 description = "Python API for AviUtl ver.2 project files (.aup2)"
 readme = "README.md"
 license = "MIT"
