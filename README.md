@@ -191,14 +191,38 @@ aviutl2 preview project.aup2 --strip --interval 30 -o timeline.png
 
 ## Development
 
+### Setup
+
 ```bash
 # Clone and setup
 git clone https://github.com/Marble-GP/AviUtl2_API.git
 cd AviUtl2_API
 python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
 
+# Activate virtual environment
+# Linux/macOS/WSL:
+source .venv/bin/activate
+
+# Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
+
+# Windows Command Prompt:
+.\.venv\Scripts\activate.bat
+
+# Install in editable mode
+pip install -e ".[dev]"
+```
+
+**Important**: Always activate the virtual environment before running `aviutl2` commands. Your prompt should show `(.venv)` when activated.
+
+If you get a PowerShell execution policy error on Windows:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+### Testing and Linting
+
+```bash
 # Test
 pytest
 

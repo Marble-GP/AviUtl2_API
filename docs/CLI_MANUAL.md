@@ -22,13 +22,39 @@ AIエージェントによる動画編集自動化を目的として設計され
 
 ## インストール
 
+### PyPIから（推奨）
+
+```bash
+pip install aviutl2-api
+```
+
+### 開発版（ソースから）
+
 ```bash
 # 仮想環境作成
-python3 -m venv .venv
+python -m venv .venv
+
+# 仮想環境をアクティベート
+# Linux/macOS/WSL:
 source .venv/bin/activate
 
-# インストール
-pip install -e .
+# Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
+
+# Windows Command Prompt:
+.\.venv\Scripts\activate.bat
+
+# 開発モードでインストール
+pip install -e ".[dev]"
+```
+
+**重要**: `aviutl2` コマンドを実行する前に、必ず仮想環境をアクティベートしてください。
+- アクティベート後、プロンプトに `(.venv)` が表示されます
+- PyPIからグローバルインストールした場合は不要です
+
+PowerShellで実行ポリシーエラーが出る場合:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
 ---

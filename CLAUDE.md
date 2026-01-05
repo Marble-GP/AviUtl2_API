@@ -23,14 +23,33 @@ pip install aviutl2-api
 git clone https://github.com/Marble-GP/AviUtl2_API.git
 cd AviUtl2_API
 python -m venv .venv
+
+# 仮想環境をアクティベート（重要！）
+# Linux/macOS/WSL:
 source .venv/bin/activate
+
+# Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
+
+# Windows Command Prompt:
+.\.venv\Scripts\activate.bat
+
+# 開発モードでインストール
 pip install -e ".[dev]"
+```
+
+**重要**: `aviutl2`コマンドを実行する前に、必ず仮想環境をアクティベートしてください。アクティベート後、プロンプトに`(.venv)`が表示されます。
+
+PowerShellで実行ポリシーエラーが出る場合:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
 ## コマンド
 
-```bash
+**前提**: すべてのコマンドは仮想環境をアクティベートした状態で実行します。
 
+```bash
 # テスト実行
 pytest                                          # 全テスト
 pytest tests/test_parser.py                     # 特定ファイル
