@@ -632,7 +632,7 @@ def add_audio(
             "再生速度": StaticValue(value=100.0),
             "ループ再生": StaticValue(value=0.0),
             "動画ファイルと連携": StaticValue(value=0.0),
-            "file": audio_path,
+            "ファイル": audio_path,
         },
     )
 
@@ -740,7 +740,7 @@ def add_video(
             "再生速度": StaticValue(value=100.0),
             "ループ再生": StaticValue(value=0.0),
             "アルファチャンネルを読み込む": StaticValue(value=0.0),
-            "file": video_path,
+            "ファイル": video_path,
         },
     )
 
@@ -856,7 +856,7 @@ def add_image(
         effect_id=0,
         name="画像ファイル",
         properties={
-            "file": image_path,
+            "ファイル": image_path,
         },
     )
 

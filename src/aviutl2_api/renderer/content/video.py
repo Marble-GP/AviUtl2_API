@@ -65,7 +65,10 @@ class VideoRenderer(ContentRenderer):
         Returns:
             Tuple of (RGBA image array, (width, height))
         """
-        file_path = get_property_string(effect.properties, "file", "")
+        # Get file path (try Japanese key first, fallback to English for compatibility)
+        file_path = get_property_string(effect.properties, "ファイル", "")
+        if not file_path:
+            file_path = get_property_string(effect.properties, "file", "")
 
         if not file_path:
             img = self._create_placeholder((640, 360), "No file specified")
