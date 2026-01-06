@@ -316,6 +316,10 @@ class FrameRenderer:
         if main_effect is None:
             return
 
+        # Skip audio objects (no visual representation)
+        if main_effect.name in ("音声ファイル", "音声再生"):
+            return
+
         # Find a renderer that can handle this effect
         content_array = None
         for renderer in self._content_renderers:
