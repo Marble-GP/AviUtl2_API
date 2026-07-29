@@ -1,4 +1,4 @@
-name: Build and publish Python package
+name: Build, test, and release
 
 on:
   push:
@@ -18,15 +18,15 @@ concurrency:
 
 jobs:
   build:
-    name: Build and verify distribution
+    name: Build and verify Python distribution
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -60,10 +60,63 @@ jobs:
         run: python -m twine check --strict dist/*
 
       - name: Upload distribution artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-package-distributions
           path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  native:
+    name: Build and test Windows plugin
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository and SDK
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Configure Visual Studio build
+        run: cmake --preset vs2022-x64
+
+      - name: Build Release plugin
+        run: cmake --build --preset vs2022-x64-release --parallel
+
+      - name: Run native tests
+        run: ctest --preset vs2022-x64-release
+
+      - name: Stage plugin and checksum
+        shell: pwsh
+        run: |
+          $plugins = @(
+            Get-ChildItem `
+              -Path "build/vs2022-x64" `
+              -Filter "AviUtl2LiveBridge.aux2" `
+              -File `
+              -Recurse
+          )
+          if ($plugins.Count -ne 1) {
+            throw "Expected exactly one AviUtl2LiveBridge.aux2, found $($plugins.Count)."
+          }
+
+          New-Item -ItemType Directory -Path "release-assets" -Force | Out-Null
+          $destination = "release-assets/AviUtl2LiveBridge.aux2"
+          Copy-Item -LiteralPath $plugins[0].FullName -Destination $destination
+
+          $digest = (
+            Get-FileHash -LiteralPath $destination -Algorithm SHA256
+          ).Hash.ToLowerInvariant()
+          "$digest  AviUtl2LiveBridge.aux2" |
+            Set-Content `
+              -LiteralPath "release-assets/AviUtl2LiveBridge.aux2.sha256" `
+              -Encoding ascii
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: aviutl2-live-bridge-windows-x64
+          path: release-assets/
           if-no-files-found: error
           retention-days: 14
 
@@ -82,10 +135,46 @@ jobs:
 
     steps:
       - name: Download distribution artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: python-package-distributions
           path: dist/
 
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  release:
+    name: Publish Windows plugin to GitHub Releases
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs:
+      - build
+      - native
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download plugin artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: aviutl2-live-bridge-windows-x64
+          path: release-assets/
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=(
+            release-assets/AviUtl2LiveBridge.aux2
+            release-assets/AviUtl2LiveBridge.aux2.sha256
+          )
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi
