@@ -466,6 +466,22 @@ mypy src/
 ruff check src/
 ```
 
+### Publishing to PyPI
+
+`.github/workflows/publish.yml` builds and validates the Python distributions on
+pull requests and pushes to `main`. Pushing a version tag publishes the verified
+artifact to PyPI through Trusted Publishing:
+
+```bash
+git tag v0.9.2
+git push origin v0.9.2
+```
+
+The tag without its leading `v` must exactly match `project.version` in
+`pyproject.toml`. Configure the existing PyPI project with GitHub owner
+`Marble-GP`, repository `AviUtl2_API`, workflow `publish.yml`, and environment
+`pypi`. No long-lived PyPI API token is stored in GitHub.
+
 ## Documentation
 
 - [CLI Manual](docs/CLI_MANUAL.md) - Detailed CLI documentation
