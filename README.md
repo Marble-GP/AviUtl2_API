@@ -484,8 +484,9 @@ The tag without its leading `v` must exactly match `project.version` in
 `Marble-GP`, repository `AviUtl2_API`, workflow `publish.yml`, and environment
 `pypi`. No long-lived PyPI API token is stored in GitHub.
 
-The plugin is compiled and tested entirely on the Actions `windows-latest`
-runner; a local Visual Studio installation is not required for publishing.
+The plugin is compiled and tested entirely on the Actions `windows-2022`
+runner, which matches the Visual Studio 2022 CMake preset; a local Visual Studio
+installation is not required for publishing.
 
 ## Documentation
 
