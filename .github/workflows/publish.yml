@@ -8,6 +8,11 @@ on:
       - "v*"
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish_version:
+        description: "Version to publish to PyPI; leave empty for validation only"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -47,6 +52,21 @@ jobs:
           tag_version="${GITHUB_REF_NAME#v}"
           if [[ "$tag_version" != "$package_version" ]]; then
             echo "Tag version $tag_version does not match package version $package_version." >&2
+            exit 1
+          fi
+
+      - name: Verify requested version matches package version
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_version != ''
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.publish_version }}
+        run: |
+          package_version="$(
+            python -c \
+              'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])'
+          )"
+          if [[ "$REQUESTED_VERSION" != "$package_version" ]]; then
+            echo "Requested version $REQUESTED_VERSION does not match package version $package_version." >&2
             exit 1
           fi
 
@@ -122,7 +142,9 @@ jobs:
 
   publish:
     name: Publish distribution to PyPI
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    if: >-
+      (github.event_name == 'push' && github.ref_type == 'tag') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_version != '')
     needs:
       - build
     runs-on: ubuntu-latest
@@ -131,7 +153,6 @@ jobs:
       url: https://pypi.org/p/aviutl2-api
     permissions:
       contents: read
-      id-token: write
 
     steps:
       - name: Download distribution artifact
@@ -142,6 +163,8 @@ jobs:
 
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
 
   release:
     name: Publish Windows plugin to GitHub Releases

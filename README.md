@@ -471,7 +471,7 @@ ruff check src/
 `.github/workflows/publish.yml` builds and validates the Python distributions
 and the Windows `.aux2` plugin on GitHub-hosted runners for pull requests and
 pushes to `main`. Pushing a version tag publishes the verified Python artifact
-to PyPI through Trusted Publishing and creates a GitHub Release containing
+to PyPI using a project-scoped API token and creates a GitHub Release containing
 `AviUtl2LiveBridge.aux2` and its SHA-256 checksum:
 
 ```bash
@@ -480,9 +480,14 @@ git push origin v0.9.2
 ```
 
 The tag without its leading `v` must exactly match `project.version` in
-`pyproject.toml`. Configure the existing PyPI project with GitHub owner
-`Marble-GP`, repository `AviUtl2_API`, workflow `publish.yml`, and environment
-`pypi`. No long-lived PyPI API token is stored in GitHub.
+`pyproject.toml`. Store a project-scoped PyPI API token as the
+`PYPI_API_TOKEN` secret in the GitHub `pypi` environment. The publish action
+uses PyPI project `aviutl2-api`; its API-token username is the standard
+`__token__`, so no account username or alias is stored in the workflow.
+
+An existing version can be recovered without moving its tag by running the
+workflow manually and entering the exact `publish_version`. Leaving the input
+empty performs validation only and never publishes.
 
 The plugin is compiled and tested entirely on the Actions `windows-2022`
 runner, which matches the Visual Studio 2022 CMake preset; a local Visual Studio
