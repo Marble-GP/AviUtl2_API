@@ -58,4 +58,5 @@ Thumbs.db
 
 # Project specific
 *.a0proj/
+render-tests/
 docs/AgentZero_ProjectDescription.md

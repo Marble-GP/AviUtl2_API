@@ -1,10 +1,8 @@
 """Tests for the .aup2 parser."""
 
-import pytest
 from pathlib import Path
 
-from aviutl2_api import parse_file, parse_string, to_json, from_json, serialize
-
+from aviutl2_api import from_json, parse_file, parse_string, serialize, to_json
 
 SAMPLES_DIR = Path(__file__).parent.parent / "samples"
 
@@ -29,7 +27,7 @@ class TestParserBasic:
 
     def test_parse_sample_project(self):
         """Test parsing the main sample project."""
-        project = parse_file(SAMPLES_DIR / "AviUtl2_sample_project_file_1.aup2")
+        project = parse_file(SAMPLES_DIR / "ShapeMotionTestProject.aup2")
 
         assert project.version == 2001901
         assert len(project.scenes) == 1
@@ -46,13 +44,13 @@ class TestParserBasic:
         obj = scene.objects[0]
         assert obj.object_id == 0
         assert obj.layer == 0
-        assert obj.frame_start == 0
-        assert obj.frame_end == 299
+        assert obj.frame_start == 30
+        assert obj.frame_end == 329
         assert len(obj.effects) >= 2
 
         # Check first effect
         effect = obj.effects[0]
-        assert effect.name == "動画ファイル"
+        assert effect.name == "図形"
 
     def test_parse_motion_project(self):
         """Test parsing project with animations."""
@@ -75,7 +73,25 @@ class TestParserBasic:
 
     def test_parse_special_chars(self):
         """Test parsing project with special characters."""
-        project = parse_file(SAMPLES_DIR / "SpecialChars.aup2")
+        source = """\
+[project]
+version=2001901
+[scene.0]
+scene=0
+name=Root
+video.width=1920
+video.height=1080
+video.rate=30
+video.scale=1
+audio.rate=44100
+[0]
+layer=0
+frame=0,29
+[0.0]
+effect.name=テキスト
+テキスト=[角括弧]=値\\n次の行
+"""
+        project = parse_string(source)
 
         scene = project.scenes[0]
         obj = scene.objects[0]
@@ -136,7 +152,7 @@ class TestJsonConversion:
 
     def test_json_with_objects(self):
         """Test JSON conversion with timeline objects."""
-        project = parse_file(SAMPLES_DIR / "AviUtl2_sample_project_file_1.aup2")
+        project = parse_file(SAMPLES_DIR / "ShapeMotionTestProject.aup2")
 
         json_str = to_json(project)
         project2 = from_json(json_str)
@@ -190,12 +206,12 @@ class TestModels:
 
     def test_scene_helpers(self):
         """Test Scene helper methods."""
-        project = parse_file(SAMPLES_DIR / "AviUtl2_sample_project_file_1.aup2")
+        project = parse_file(SAMPLES_DIR / "ShapeMotionTestProject.aup2")
         scene = project.scenes[0]
 
         # Test get_objects_at_frame
-        objects_at_0 = scene.get_objects_at_frame(0)
-        assert len(objects_at_0) > 0
+        objects_at_30 = scene.get_objects_at_frame(30)
+        assert len(objects_at_30) > 0
 
         # Test get_objects_on_layer
         objects_on_layer_0 = scene.get_objects_on_layer(0)
@@ -206,10 +222,10 @@ class TestModels:
 
     def test_timeline_object_duration(self):
         """Test TimelineObject duration calculation."""
-        project = parse_file(SAMPLES_DIR / "AviUtl2_sample_project_file_1.aup2")
+        project = parse_file(SAMPLES_DIR / "ShapeMotionTestProject.aup2")
         obj = project.scenes[0].objects[0]
 
-        # frame=0,299 means 300 frames
+        # frame=30,329 means 300 frames
         assert obj.duration_frames == 300
 
         # At 30fps, that's 10 seconds

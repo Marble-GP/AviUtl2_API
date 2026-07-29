@@ -17,6 +17,7 @@ from aviutl2_api import (
     Project,
     Scene,
     TimelineObject,
+    __version__,
     from_json,
     parse_file,
     serialize_to_file,
@@ -56,7 +57,7 @@ def safe_echo(message: str, err: bool = False) -> None:
 
 
 @click.group()
-@click.version_option(version="0.1.1", prog_name="aviutl2")
+@click.version_option(version=__version__, prog_name="aviutl2")
 def main() -> None:
     """AviUtl2 Project API - .aup2ファイル操作ツール
 

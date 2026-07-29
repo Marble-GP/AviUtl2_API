@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Marble-GP/AviUtl2_API/protocol/response.schema.json",
+  "title": "AviUtl2 Live Bridge response",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "ok",
+        "result"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "ok",
+        "error"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "ok": {
+          "const": false
+        },
+        "error": {
+          "type": "object",
+          "required": [
+            "code",
+            "message",
+            "details",
+            "retryable"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "details": {
+              "type": "object"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  ]
+}

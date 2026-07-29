@@ -1,0 +1,11 @@
+{
+  "id": "fixture-hello-1",
+  "ok": true,
+  "result": {
+    "edit_state": "edit",
+    "pid": 4242,
+    "plugin_version": "0.9.2",
+    "protocol_version": 1,
+    "sdk_baseline": "mirror-2026-07-25"
+  }
+}

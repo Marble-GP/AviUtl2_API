@@ -1,0 +1,18 @@
+{
+  "id": "fixture-batch-validate-1",
+  "protocol_version": 1,
+  "method": "batch.validate",
+  "params": {
+    "commands": [
+      {
+        "op": "object.create_from_alias",
+        "client_id": "title",
+        "layer": 2,
+        "frame": 10,
+        "length": 30,
+        "alias": "[Object]\r\n[Object.0]\r\neffect.name=テキスト\r\nテキスト=Phase 2\r\n[Object.1]\r\neffect.name=標準描画\r\n"
+      }
+    ]
+  },
+  "future_field": "ignored"
+}

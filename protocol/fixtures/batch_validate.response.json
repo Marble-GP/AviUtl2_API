@@ -1,0 +1,10 @@
+{
+  "id": "fixture-batch-validate-1",
+  "ok": true,
+  "result": {
+    "valid": true,
+    "command_count": 1,
+    "validation_scope": "structure_and_requested_placement",
+    "alias_semantics": "verified_on_apply"
+  }
+}

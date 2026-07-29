@@ -1,0 +1,6 @@
+{
+  "id": "fixture-hello-1",
+  "protocol_version": 1,
+  "method": "system.hello",
+  "params": {}
+}

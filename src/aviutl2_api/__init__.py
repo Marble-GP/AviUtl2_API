@@ -19,7 +19,7 @@ Example usage:
     json_str = to_json(project)
 """
 
-__version__ = "0.1.0"
+__version__ = "0.9.2"
 
 # Models
 from aviutl2_api.models import (
