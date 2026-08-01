@@ -94,6 +94,46 @@ def _effect_catalog_names(client: LiveClient) -> set[str]:
         start = page.next_start
 
 
+def _timeline_continuity_issues(
+    snapshot: ProjectSnapshot,
+) -> tuple[PreflightIssue, ...]:
+    """Report timeline continuity without rejecting valid transition layouts."""
+    issues: list[PreflightIssue] = []
+    by_layer: dict[int, list[tuple[int, int, str]]] = {}
+    for obj in snapshot.objects:
+        by_layer.setdefault(obj.layer, []).append(
+            (obj.frame_start, obj.frame_end, obj.object_id)
+        )
+    for layer, ranges in by_layer.items():
+        ranges.sort()
+        for previous, current in zip(ranges, ranges[1:]):
+            if current[0] <= previous[1]:
+                issues.append(
+                    PreflightIssue(
+                        "warning",
+                        "TIMELINE_COLLISION",
+                        (
+                            f"Objects overlap on layer {layer}; this may be "
+                            "an intentional transition."
+                        ),
+                        (previous[2], current[2]),
+                    )
+                )
+            elif current[0] > previous[1] + 1:
+                issues.append(
+                    PreflightIssue(
+                        "warning",
+                        "TIMELINE_GAP",
+                        (
+                            f"Layer {layer} has a gap from frame "
+                            f"{previous[1] + 1} to {current[0] - 1}."
+                        ),
+                        (previous[2], current[2]),
+                    )
+                )
+    return tuple(issues)
+
+
 def run_preflight(
     client: LiveClient,
     *,
@@ -182,35 +222,7 @@ def run_preflight(
             )
         )
 
-    by_layer: dict[int, list[tuple[int, int, str]]] = {}
-    for obj in snapshot.objects:
-        by_layer.setdefault(obj.layer, []).append(
-            (obj.frame_start, obj.frame_end, obj.object_id)
-        )
-    for layer, ranges in by_layer.items():
-        ranges.sort()
-        for previous, current in zip(ranges, ranges[1:]):
-            if current[0] <= previous[1]:
-                issues.append(
-                    PreflightIssue(
-                        "error",
-                        "TIMELINE_COLLISION",
-                        f"Objects overlap on layer {layer}.",
-                        (previous[2], current[2]),
-                    )
-                )
-            elif current[0] > previous[1] + 1:
-                issues.append(
-                    PreflightIssue(
-                        "warning",
-                        "TIMELINE_GAP",
-                        (
-                            f"Layer {layer} has a gap from frame "
-                            f"{previous[1] + 1} to {current[0] - 1}."
-                        ),
-                        (previous[2], current[2]),
-                    )
-                )
+    issues.extend(_timeline_continuity_issues(snapshot))
 
     fonts = _catalog_strings(client, "font")
     modules = _catalog_strings(client, "module")

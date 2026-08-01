@@ -48,9 +48,12 @@ class ScriptedStream:
         self.read_chunk = read_chunk
         self.write_chunk = write_chunk
         self.closed = False
+        self.read_timeouts: list[float] = []
+        self.write_timeouts: list[float] = []
 
     def read(self, size: int, timeout: float) -> bytes:
         assert timeout > 0
+        self.read_timeouts.append(timeout)
         count = min(size, self.read_chunk, len(self.incoming))
         data = bytes(self.incoming[:count])
         del self.incoming[:count]
@@ -58,6 +61,7 @@ class ScriptedStream:
 
     def write(self, data: bytes, timeout: float) -> int:
         assert timeout > 0
+        self.write_timeouts.append(timeout)
         count = min(len(data), self.write_chunk)
         self.written.extend(data[:count])
         return count
@@ -281,6 +285,30 @@ def test_snapshot_returns_revision_scoped_objects() -> None:
         "target": {"object_id": "obj-123-0"},
     }
     assert snapshot.objects[0].api_locked is False
+
+
+def test_media_inventory_uses_long_default_timeout() -> None:
+    result = {
+        "revision": 123,
+        "scene_id": 0,
+        "file_item_count": 0,
+        "unique_file_count": 0,
+        "missing_count": 0,
+        "unreadable_count": 0,
+        "files": [],
+    }
+    response = json.dumps(
+        {"id": "py-00000001", "ok": True, "result": result}
+    ).encode()
+    stream = ScriptedStream(encode_frame(response), write_chunk=4096)
+    client = LiveClient(FramedTransport(stream), default_timeout=5.0)
+
+    inventory = client.get_media_inventory()
+
+    assert inventory.revision == 123
+    assert stream.read_timeouts
+    assert stream.write_timeouts
+    assert min(stream.read_timeouts + stream.write_timeouts) > 100.0
 
 
 def test_effect_catalog_returns_typed_page() -> None:

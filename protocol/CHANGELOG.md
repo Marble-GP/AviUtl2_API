@@ -1,5 +1,21 @@
 # Live Bridge protocol changelog
 
+## Protocol v1 - plugin/client 0.9.3
+
+- Fixed `project.get_snapshot` for objects that occupy multiple timeline
+  layers. AviUtl2 reports such an object while each occupied layer is searched,
+  but reports its base layer in the returned range; the Bridge now captures it
+  once on that base layer instead of rejecting the snapshot with
+  `INVALID_HOST_OBJECT_RANGE`.
+- Improved invalid host-range diagnostics with the queried layer/frame and the
+  range returned by AviUtl2.
+- Python `media.inventory` now uses a 120-second default timeout because native
+  validation of every file item can legitimately exceed the general 5-second
+  request timeout in edited projects with many assets.
+- Timeline overlap remains visible in preflight but is advisory rather than a
+  release-blocking error because same-layer overlap is valid for transitions.
+- Protocol v1 remains backward compatible.
+
 ## Protocol v1 - plugin/client 0.9.2
 
 - Raised the pipe limit to eight simultaneous clients. SDK work uses one FIFO

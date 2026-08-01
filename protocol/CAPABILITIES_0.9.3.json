@@ -1,0 +1,63 @@
+{
+  "plugin_version": "0.9.3",
+  "protocol_version": 1,
+  "sdk_baseline": "mirror-2026-07-25",
+  "release_gate": {
+    "ready_for_1_0": false,
+    "blocked_by": [
+      "sdk_scene_crud",
+      "sdk_undo_redo"
+    ]
+  },
+  "native_sdk": [
+    "current_scene_get_update",
+    "effect_add_delete_enable",
+    "font_palette_module_catalog",
+    "layer_name_visibility",
+    "media_create_probe",
+    "native_audio_render",
+    "native_video_render",
+    "object_inspection",
+    "object_item_update",
+    "object_section_create_delete_move",
+    "timeline_move_delete"
+  ],
+  "verified_alias_fallback": [
+    "media_trim_fixed_positive_speed",
+    "object_duration",
+    "object_effect_reorder",
+    "object_split_basic_media"
+  ],
+  "bridge_runtime": [
+    "eight_clients",
+    "event_watch",
+    "fifo_sdk_queue",
+    "filtered_paged_snapshot",
+    "idempotent_operations",
+    "media_inventory_relink",
+    "timeline_transaction",
+    "timeline_shift_ripple_close_gap"
+  ],
+  "python_workflow": [
+    "audio_qc",
+    "common_effect_catalog_resolver",
+    "contact_sheet",
+    "editing_session",
+    "preflight",
+    "srt_webvtt_subtitles"
+  ],
+  "unsupported": [
+    "encoder_export_upload",
+    "history_redo",
+    "history_undo",
+    "playback_control",
+    "project_open",
+    "project_save",
+    "project_save_as",
+    "scene_create",
+    "scene_delete",
+    "scene_duplicate",
+    "scene_list",
+    "scene_switch"
+  ]
+}

@@ -9,6 +9,7 @@
 #include "sdk_adapter.hpp"
 
 #include <windows.h>
+#include <plugin2.h>
 
 #include <array>
 #include <atomic>
@@ -57,6 +58,7 @@ using aviutl2::live::ProjectInfoResult;
 using aviutl2::live::RenderedAudioResult;
 using aviutl2::live::RenderedFrameResult;
 using aviutl2::live::SdkAdapter;
+using aviutl2::live::HostSdkAdapter;
 using aviutl2::live::SceneInfoResult;
 using aviutl2::live::SceneUpdate;
 using aviutl2::live::SnapshotObject;
@@ -627,6 +629,104 @@ public:
     int render_calls = 0;
     int audio_render_calls = 0;
 };
+
+struct HostObjectFixture final {
+    OBJECT_LAYER_FRAME range{};
+    int occupied_layer_end = 0;
+    const char* alias = nullptr;
+};
+
+std::array<HostObjectFixture, 3> host_object_fixtures{{
+    {{0, 10, 39}, 1, "[Object]\r\n[Object.0]\r\neffect.name=Text\r\n"},
+    {{1, 40, 49}, 1, "[Object]\r\n[Object.0]\r\neffect.name=Shape\r\n"},
+    {{2, 50, 69}, 2, "[Object]\r\n[Object.0]\r\neffect.name=Audio\r\n"},
+}};
+
+EDIT_INFO host_edit_info{};
+EDIT_SECTION host_edit_section{};
+
+[[nodiscard]] OBJECT_HANDLE find_host_object(
+    const int layer,
+    const int frame) {
+    for (HostObjectFixture& fixture : host_object_fixtures) {
+        if (fixture.range.layer <= layer &&
+            layer <= fixture.occupied_layer_end &&
+            fixture.range.end >= frame) {
+            return static_cast<OBJECT_HANDLE>(&fixture);
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] OBJECT_LAYER_FRAME get_host_object_range(
+    const OBJECT_HANDLE object) {
+    return static_cast<HostObjectFixture*>(object)->range;
+}
+
+[[nodiscard]] LPCSTR get_host_object_alias(const OBJECT_HANDLE object) {
+    return static_cast<HostObjectFixture*>(object)->alias;
+}
+
+void get_host_edit_info(EDIT_INFO* info, const int info_size) {
+    require(
+        info_size == static_cast<int>(sizeof(EDIT_INFO)),
+        "host adapter should request the complete edit information");
+    *info = host_edit_info;
+}
+
+[[nodiscard]] int get_host_edit_state() {
+    return EDIT_HANDLE::EDIT_STATE_EDIT;
+}
+
+[[nodiscard]] bool call_host_read_section(
+    void* parameter,
+    void (*callback)(void*, EDIT_SECTION*)) {
+    callback(parameter, &host_edit_section);
+    return true;
+}
+
+void test_host_snapshot_with_multi_layer_object() {
+    host_edit_info = {};
+    host_edit_info.width = 1920;
+    host_edit_info.height = 1080;
+    host_edit_info.rate = 30;
+    host_edit_info.scale = 1;
+    host_edit_info.sample_rate = 44100;
+    host_edit_info.frame_max = 69;
+    host_edit_info.layer_max = 2;
+    host_edit_info.scene_id = 7;
+
+    host_edit_section = {};
+    host_edit_section.find_object = find_host_object;
+    host_edit_section.get_object_layer_frame = get_host_object_range;
+    host_edit_section.get_object_alias = get_host_object_alias;
+
+    EDIT_HANDLE edit_handle{};
+    edit_handle.get_edit_info = get_host_edit_info;
+    edit_handle.get_edit_state = get_host_edit_state;
+    edit_handle.call_read_section_param = call_host_read_section;
+
+    HostSdkAdapter adapter(&edit_handle);
+    const SnapshotResult first = adapter.get_snapshot();
+    require(first.ok, "multi-layer host snapshot should succeed");
+    require(
+        first.objects.size() == host_object_fixtures.size(),
+        "multi-layer objects should be captured exactly once");
+    require(
+        first.objects[0].layer == 0 &&
+            first.objects[0].frame_start == 10 &&
+            first.objects[0].frame_end == 39,
+        "multi-layer object should retain its base range");
+    require(
+        first.objects[1].layer == 1 && first.objects[2].layer == 2,
+        "snapshot objects should remain in base-layer order");
+
+    const SnapshotResult second = adapter.get_snapshot();
+    require(second.ok, "repeated multi-layer snapshot should succeed");
+    require(
+        second.revision == first.revision,
+        "unchanged multi-layer snapshots should have a stable revision");
+}
 
 void test_json() {
     const Json value = aviutl2::live::parse_json(
@@ -1503,6 +1603,7 @@ int main(const int argument_count, char** arguments) {
             return run_echo_server(pipe_name);
         }
         test_json();
+        test_host_snapshot_with_multi_layer_object();
         test_protocol_and_fixtures();
         test_sessions_events_and_audio();
         test_pipe_server();

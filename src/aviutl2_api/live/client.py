@@ -97,6 +97,8 @@ _MUTATION_METHODS = frozenset(
     }
 )
 
+_MEDIA_INVENTORY_TIMEOUT = 120.0
+
 
 class _Unchanged:
     pass
@@ -521,9 +523,9 @@ class LiveClient:
     def get_media_inventory(
         self,
         *,
-        timeout: float | None = None,
+        timeout: float | None = _MEDIA_INVENTORY_TIMEOUT,
     ) -> MediaInventory:
-        """Inspect every native file item and report missing/duplicate media."""
+        """Inspect every file item with a long default timeout for large projects."""
         return MediaInventory.from_wire(
             self.call("media.inventory", timeout=timeout)
         )

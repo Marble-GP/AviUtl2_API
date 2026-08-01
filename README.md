@@ -84,7 +84,7 @@ serialize_to_file(project, "output.aup2")
 json_data = to_json(project)
 ```
 
-### Live Bridge (0.9.2 beta)
+### Live Bridge (0.9.3 beta)
 
 The typed Python client and thin `.aux2` plugin add live access without changing
 the existing `.aup2` workflow:
@@ -278,10 +278,14 @@ existing destination unless `overwrite=True`. Eight clients can observe the same
 enabled AviUtl2 process, but SDK work is FIFO-serialized and mutations are
 session-idempotent.
 
+0.9.3 fixes live snapshots for media and other objects that occupy multiple
+timeline layers. Such objects are returned once on their base layer instead of
+causing `INVALID_HOST_OBJECT_RANGE`.
+
 The current official SDK cannot list/create/duplicate/switch scenes or execute
 Undo/Redo. Those capabilities are reported as false, calls fail with
 `SDK_METHOD_UNAVAILABLE`, and the 1.0 release gate remains closed. See
-[`protocol/CAPABILITIES_0.9.2.json`](protocol/CAPABILITIES_0.9.2.json).
+[`protocol/CAPABILITIES_0.9.3.json`](protocol/CAPABILITIES_0.9.3.json).
 
 Render an exact composite frame with the running AviUtl2 process:
 
@@ -475,8 +479,8 @@ to PyPI using a project-scoped API token and creates a GitHub Release containing
 `AviUtl2LiveBridge.aux2` and its SHA-256 checksum:
 
 ```bash
-git tag v0.9.2
-git push origin v0.9.2
+git tag v0.9.3
+git push origin v0.9.3
 ```
 
 The tag without its leading `v` must exactly match `project.version` in

@@ -20,7 +20,7 @@ namespace {
 
 COMMON_PLUGIN_TABLE g_plugin_table{
     L"AviUtl2 Live Bridge",
-    L"AviUtl2 Live Bridge version 0.9.2",
+    L"AviUtl2 Live Bridge version 0.9.3",
 };
 
 std::mutex g_state_mutex;

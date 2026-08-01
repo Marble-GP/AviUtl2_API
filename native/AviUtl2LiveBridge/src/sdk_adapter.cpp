@@ -269,20 +269,39 @@ void hash_integer(
             if (handle == nullptr) {
                 break;
             }
+            const OBJECT_LAYER_FRAME range =
+                edit->get_object_layer_frame(handle);
+            if (range.layer < 0 || range.layer > info.layer_max ||
+                range.start < 0 || range.end < range.start ||
+                range.end < search_frame) {
+                error_code = "INVALID_HOST_OBJECT_RANGE";
+                error_message =
+                    "AviUtl2 returned an invalid timeline object range "
+                    "while searching layer " + std::to_string(layer) +
+                    " from frame " + std::to_string(search_frame) +
+                    " (base layer " + std::to_string(range.layer) +
+                    ", frames " + std::to_string(range.start) + "-" +
+                    std::to_string(range.end) + ").";
+                return false;
+            }
+
+            // find_object() also reports an object from each secondary layer
+            // occupied by multi-layer media.  get_object_layer_frame() returns
+            // that object's base layer, so capture it only while enumerating
+            // the base layer.  The object is still used to advance the search
+            // cursor on the secondary layer to guarantee forward progress.
+            if (range.layer != layer) {
+                if (range.end == std::numeric_limits<int>::max()) {
+                    break;
+                }
+                search_frame = range.end + 1;
+                continue;
+            }
+
             if (timeline.objects.size() >= kMaxSnapshotObjects) {
                 error_code = "SNAPSHOT_TOO_LARGE";
                 error_message =
                     "The object count exceeds the snapshot limit.";
-                return false;
-            }
-
-            const OBJECT_LAYER_FRAME range =
-                edit->get_object_layer_frame(handle);
-            if (range.layer != layer || range.start < search_frame ||
-                range.end < range.start) {
-                error_code = "INVALID_HOST_OBJECT_RANGE";
-                error_message =
-                    "AviUtl2 returned an invalid timeline object range.";
                 return false;
             }
 

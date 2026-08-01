@@ -1,12 +1,12 @@
 # AviUtl2 Live Bridge エージェント向け完全APIマニュアル
 
-対象バージョン: plugin / Python client 0.9.2
+対象バージョン: plugin / Python client 0.9.3
 
 Wire protocol: v1 additive
 
 対象OS: Windows
 
-最終更新: 2026-07-29
+最終更新: 2026-08-01
 
 この文書は、Codex、Claude Code、Copilot CLI、Agent ZeroなどのAIエージェントが、
 ユーザーの開いているAviUtl2プロジェクトをLive Bridge経由で安全に編集するための
@@ -256,7 +256,7 @@ print(page.offset, page.total, page.next_offset)
 
 ### 4.4 sessionとoperation ID
 
-`LiveClient.connect()`は0.9.2 pluginに対して自動的に`session.open`を呼ぶ。
+`LiveClient.connect()`は0.9.3 pluginに対して自動的に`session.open`を呼ぶ。
 
 ```python
 with LiveClient.connect(pid=32652) as client:
@@ -458,7 +458,7 @@ client.history_undo() -> dict
 client.history_redo() -> dict
 ```
 
-0.9.2では公式SDKに実行APIがなく、呼ぶと`SDK_METHOD_UNAVAILABLE`になる。
+0.9.3では公式SDKに実行APIがなく、呼ぶと`SDK_METHOD_UNAVAILABLE`になる。
 `EditingSession.undo()/redo()`は先にcapabilityを検査し、
 `CapabilityUnavailableError`を送出する。
 
@@ -594,6 +594,10 @@ receipt = client.relink_media(
     operation_id="relink-assets-0001",
 )
 ```
+
+`get_media_inventory()`は全file itemをAviUtl2で検査するため、大規模な
+編集済みプロジェクトでは時間がかかる。Python clientはこのmethodに限り
+既定で120秒待機する。
 
 全destinationをAviUtl2 native probeで確認し、一つのtransaction/Undo単位で
 file itemを更新する。
@@ -1102,6 +1106,10 @@ report = run_preflight(
 - `AUDIO_CLIPPING`
 - `AUDIO_SILENCE`
 
+`TIMELINE_COLLISION`と`TIMELINE_GAP`は、transitionや意図的な空白でも
+発生するためwarningである。missing media、unreadable media、missing
+font/effect、audio異常などのerrorだけが`report.ready`をfalseにする。
+
 `PreflightReport.ready`はerror severityがない場合にtrue。warningは編集方針に応じて
 agentが報告・判断する。
 
@@ -1532,7 +1540,7 @@ Python `render_frame()`と`render_audio()`はこの処理を自動で行う。
 
 ### 8.5 capability falseの予約method
 
-次のmethodは0.9.2の`methods`へ含まれず、直接呼ぶと
+次のmethodは0.9.3の`methods`へ含まれず、直接呼ぶと
 `SDK_METHOD_UNAVAILABLE`になる。
 
 - `scene.list`
@@ -1627,7 +1635,7 @@ print(caps["release_gate"])
 # }
 ```
 
-0.9.2で機能を偽装しない外部依存:
+0.9.3で機能を偽装しない外部依存:
 
 - 公式SDKのscene list/create/duplicate/switch
 - 公式SDKのUndo/Redo実行API
@@ -1673,5 +1681,5 @@ SDKへ追加された場合も公開API名は維持し、capabilityと内部back
 - `docs/LIVE_BRIDGE_SECURITY.md`: API lockと脅威モデル
 - `docs/LIVE_BRIDGE_DEVELOPMENT.md`: native build/install
 - `docs/LIVE_BRIDGE_V1_ROADMAP.md`: version計画とSDK依存
-- `protocol/CAPABILITIES_0.9.2.json`: 静的capability manifest
+- `protocol/CAPABILITIES_0.9.3.json`: 静的capability manifest
 - `protocol/CHANGELOG.md`: protocol変更履歴

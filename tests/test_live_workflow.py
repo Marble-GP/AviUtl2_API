@@ -9,7 +9,8 @@ from PIL import Image
 from aviutl2_api.live.audio import RenderedAudio
 from aviutl2_api.live.frame import RenderedFrame, make_contact_sheet
 from aviutl2_api.live.media import CreatedMediaObject
-from aviutl2_api.live.snapshot import SnapshotObject
+from aviutl2_api.live.qc import _timeline_continuity_issues
+from aviutl2_api.live.snapshot import ProjectSnapshot, SnapshotObject
 from aviutl2_api.live.subtitles import (
     SubtitleLayerPolicy,
     assign_subtitle_layers,
@@ -167,3 +168,33 @@ def test_subtitle_assignment_respects_existing_objects() -> None:
         occupied=occupied,
     )
     assert placement[0].layer == 5
+
+
+def test_timeline_overlap_is_advisory_for_transition_layouts() -> None:
+    objects = tuple(
+        SnapshotObject(
+            object_id=f"obj-10-{index}",
+            revision=10,
+            layer=0,
+            frame_start=start,
+            frame_end=end,
+            name=None,
+            alias=None,
+        )
+        for index, (start, end) in enumerate(((0, 20), (15, 30), (40, 49)))
+    )
+    snapshot = ProjectSnapshot(
+        revision=10,
+        scene_id=0,
+        objects=objects,
+        total=len(objects),
+    )
+
+    issues = _timeline_continuity_issues(snapshot)
+
+    assert [issue.code for issue in issues] == [
+        "TIMELINE_COLLISION",
+        "TIMELINE_GAP",
+    ]
+    assert all(issue.severity == "warning" for issue in issues)
+    assert "intentional transition" in issues[0].message
