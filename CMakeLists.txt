@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     AviUtl2API
-    VERSION 0.9.3
+    VERSION 0.9.5
     LANGUAGES CXX
 )
 

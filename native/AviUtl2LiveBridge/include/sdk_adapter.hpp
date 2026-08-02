@@ -291,6 +291,63 @@ struct TimelineTransactionResult final {
     int collision_end = -1;
 };
 
+enum class EditPlanCommandType {
+    create_alias,
+    create_media,
+    update,
+    move,
+    remove,
+    add_effect,
+    set_effect_enabled,
+};
+
+enum class EditPlanEffectScope {
+    primary,
+    video,
+    audio,
+};
+
+struct EditPlanEffect final {
+    std::string profile;
+    std::wstring effect;
+    std::vector<EffectInitialItem> items;
+    EditPlanEffectScope scope = EditPlanEffectScope::primary;
+    bool enabled = true;
+};
+
+struct EditPlanCommand final {
+    std::string key;
+    EditPlanCommandType type = EditPlanCommandType::create_alias;
+    std::size_t object_index = 0U;
+    std::string alias;
+    std::wstring file;
+    int layer = 0;
+    int frame = 0;
+    int length = 0;
+    std::vector<ObjectItemUpdate> updates;
+    std::optional<std::wstring> name;
+    std::wstring effect;
+    std::vector<EffectInitialItem> effect_items;
+    std::vector<EditPlanEffect> effects;
+    bool enabled = true;
+};
+
+struct EditPlanResult final {
+    bool ok = false;
+    bool valid = false;
+    std::int64_t current_revision = -1;
+    std::size_t applied_count = 0U;
+    std::size_t failed_command_index =
+        std::numeric_limits<std::size_t>::max();
+    bool rollback_attempted = false;
+    bool rollback_complete = true;
+    std::size_t restored_count = 0U;
+    bool gui_undo_required = false;
+    std::string error_code;
+    std::string error_message;
+    bool retryable = false;
+};
+
 struct MediaInfo final {
     bool extension_supported = false;
     bool readable = false;
@@ -474,6 +531,16 @@ public:
         std::int64_t expected_revision,
         const std::vector<TimelineCommand>& commands,
         bool apply) noexcept = 0;
+    [[nodiscard]] virtual EditPlanResult run_edit_plan(
+        std::int64_t,
+        const std::vector<EditPlanCommand>&,
+        bool) noexcept {
+        EditPlanResult result;
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "The mixed edit-plan SDK adapter is unavailable.";
+        return result;
+    }
     [[nodiscard]] virtual MediaProbeResult probe_media(
         const std::wstring& file) noexcept = 0;
     [[nodiscard]] virtual CreateMediaResult create_object_from_media_file(
@@ -596,6 +663,10 @@ public:
     run_timeline_transaction(
         std::int64_t expected_revision,
         const std::vector<TimelineCommand>& commands,
+        bool apply) noexcept override;
+    [[nodiscard]] EditPlanResult run_edit_plan(
+        std::int64_t expected_revision,
+        const std::vector<EditPlanCommand>& commands,
         bool apply) noexcept override;
     [[nodiscard]] MediaProbeResult probe_media(
         const std::wstring& file) noexcept override;

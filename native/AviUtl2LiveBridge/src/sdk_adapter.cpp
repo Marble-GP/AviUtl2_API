@@ -18,8 +18,10 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <iterator>
 #include <mutex>
 #include <new>
+#include <set>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
@@ -1655,6 +1657,46 @@ struct StaticPosition final {
     return parsed.ec == std::errc{} &&
            parsed.ptr == token.data() + token.size() &&
            std::isfinite(value);
+}
+
+[[nodiscard]] bool equivalent_alias_value(
+    const std::string_view requested,
+    const std::string_view actual) noexcept {
+    if (requested == actual) {
+        return true;
+    }
+    std::size_t requested_start = 0U;
+    std::size_t actual_start = 0U;
+    while (true) {
+        const std::size_t requested_end = requested.find(',', requested_start);
+        const std::size_t actual_end = actual.find(',', actual_start);
+        const std::string_view requested_token = requested.substr(
+            requested_start,
+            requested_end == std::string_view::npos
+                ? std::string_view::npos
+                : requested_end - requested_start);
+        const std::string_view actual_token = actual.substr(
+            actual_start,
+            actual_end == std::string_view::npos
+                ? std::string_view::npos
+                : actual_end - actual_start);
+        double requested_number = 0.0;
+        double actual_number = 0.0;
+        if (parse_number_token(requested_token, requested_number) &&
+            parse_number_token(actual_token, actual_number)) {
+            if (std::abs(requested_number - actual_number) > 0.000001) {
+                return false;
+            }
+        } else if (requested_token != actual_token) {
+            return false;
+        }
+        if (requested_end == std::string_view::npos ||
+            actual_end == std::string_view::npos) {
+            return requested_end == actual_end;
+        }
+        requested_start = requested_end + 1U;
+        actual_start = actual_end + 1U;
+    }
 }
 
 [[nodiscard]] bool parse_static_position(
@@ -3765,6 +3807,877 @@ void apply_callback(void* parameter, EDIT_SECTION* edit) noexcept {
     context.result.ok = true;
 }
 
+struct EditPlanContext final {
+    EDIT_HANDLE* edit_handle = nullptr;
+    std::int64_t expected_revision = 0;
+    const std::vector<EditPlanCommand>* commands = nullptr;
+    bool apply = false;
+    EditPlanResult result;
+};
+
+struct CreatedPlanObject final {
+    OBJECT_HANDLE object = nullptr;
+    bool media = false;
+};
+
+struct CreatedPlanEffect final {
+    OBJECT_HANDLE object = nullptr;
+    EFFECT_HANDLE effect = nullptr;
+};
+
+struct HeldPlanObject final {
+    OBJECT_HANDLE object = nullptr;
+    int layer = 0;
+    int frame = 0;
+};
+
+void edit_plan_callback(void* parameter, EDIT_SECTION* edit) noexcept {
+    auto& context = *static_cast<EditPlanContext*>(parameter);
+    try {
+        if (context.commands == nullptr || context.commands->empty() ||
+            context.commands->size() > kMaxBatchCommands) {
+            context.result.error_code = "INVALID_ARGUMENT";
+            context.result.error_message =
+                "An edit plan must contain between 1 and 128 commands.";
+            return;
+        }
+        CapturedTimeline timeline;
+        if (!capture_timeline(
+                context.edit_handle,
+                edit,
+                timeline,
+                context.result.error_code,
+                context.result.error_message)) {
+            return;
+        }
+        context.result.current_revision = timeline.revision;
+        if (timeline.revision != context.expected_revision) {
+            context.result.error_code = "STALE_PROJECT_STATE";
+            context.result.error_message =
+                "The AviUtl2 project changed after the edit plan was prepared.";
+            return;
+        }
+
+        std::vector<CreateAliasCommand> create_placements;
+        std::vector<std::size_t> create_plan_indices;
+        std::vector<TimelineCommand> timeline_commands;
+        std::vector<std::size_t> timeline_plan_indices;
+        for (std::size_t index = 0U;
+             index < context.commands->size();
+             ++index) {
+            const EditPlanCommand& command = (*context.commands)[index];
+            context.result.failed_command_index = index;
+            if (command.type == EditPlanCommandType::create_alias ||
+                command.type == EditPlanCommandType::create_media) {
+                if (command.layer < 0 || command.frame < 0 ||
+                    command.length <= 0) {
+                    context.result.error_code = "INVALID_ARGUMENT";
+                    context.result.error_message =
+                        "Plan creation placement is invalid.";
+                    return;
+                }
+                create_placements.push_back(CreateAliasCommand{
+                    command.key,
+                    command.type == EditPlanCommandType::create_alias
+                        ? command.alias
+                        : std::string("[Object]\neffect.name=Media"),
+                    command.layer,
+                    command.frame,
+                    command.length,
+                });
+                create_plan_indices.push_back(index);
+                if (command.type == EditPlanCommandType::create_alias) {
+                    if (command.alias.empty() ||
+                        edit->create_object_from_alias == nullptr) {
+                        context.result.error_code =
+                            "EDIT_SECTION_UNAVAILABLE";
+                        context.result.error_message =
+                            "Alias creation is unavailable for this edit plan.";
+                        return;
+                    }
+                } else {
+                    if (command.file.empty() ||
+                        edit->is_support_media_file == nullptr ||
+                        edit->create_object_from_media_file == nullptr ||
+                        !edit->is_support_media_file(
+                            command.file.c_str(),
+                            true)) {
+                        context.result.error_code = "UNSUPPORTED_MEDIA";
+                        context.result.error_message =
+                            "AviUtl2 cannot read a planned media file.";
+                        return;
+                    }
+                    if (!command.updates.empty() &&
+                        (edit->get_object_item_value == nullptr ||
+                         edit->set_object_item_value == nullptr)) {
+                        context.result.error_code =
+                            "EDIT_SECTION_UNAVAILABLE";
+                        context.result.error_message =
+                            "Initial media item editing is unavailable.";
+                        return;
+                    }
+                }
+                if (!command.effects.empty() &&
+                    (edit->create_effect == nullptr ||
+                     edit->delete_effect == nullptr ||
+                     edit->get_effect_list == nullptr ||
+                     edit->get_effect_name == nullptr ||
+                     edit->get_effect_item_value == nullptr ||
+                     edit->set_effect_item_value == nullptr ||
+                     edit->get_effect_enable == nullptr ||
+                     edit->set_effect_enable == nullptr)) {
+                    context.result.error_code =
+                        "EDIT_SECTION_UNAVAILABLE";
+                    context.result.error_message =
+                        "Create-time effect editing is unavailable.";
+                    return;
+                }
+                continue;
+            }
+            if (command.object_index >= timeline.objects.size()) {
+                context.result.error_code = "OBJECT_NOT_FOUND";
+                context.result.error_message =
+                    "An edit-plan target does not exist.";
+                return;
+            }
+            CapturedObject& object =
+                timeline.objects[command.object_index];
+            if (object.api_locked) {
+                context.result.error_code = "OBJECT_API_LOCKED";
+                context.result.error_message =
+                    "An edit-plan target is API locked.";
+                return;
+            }
+            if (edit->get_layer_lock != nullptr &&
+                edit->get_layer_lock(object.layer)) {
+                context.result.error_code = "LAYER_LOCKED";
+                context.result.error_message =
+                    "An edit-plan target layer is locked.";
+                return;
+            }
+            if (command.type == EditPlanCommandType::update) {
+                if (!command.updates.empty()) {
+                    timeline_commands.push_back(TimelineCommand{
+                        TimelineCommandType::set_items,
+                        command.object_index,
+                        0,
+                        0,
+                        command.updates,
+                    });
+                    timeline_plan_indices.push_back(index);
+                }
+                if (command.name.has_value()) {
+                    TimelineCommand item;
+                    item.type = TimelineCommandType::set_name;
+                    item.object_index = command.object_index;
+                    item.name = command.name;
+                    timeline_commands.push_back(std::move(item));
+                    timeline_plan_indices.push_back(index);
+                }
+                if (command.updates.empty() &&
+                    !command.name.has_value()) {
+                    context.result.error_code = "INVALID_ARGUMENT";
+                    context.result.error_message =
+                        "An object update must change at least one value.";
+                    return;
+                }
+            } else if (command.type == EditPlanCommandType::move) {
+                TimelineCommand item;
+                item.type = TimelineCommandType::move;
+                item.object_index = command.object_index;
+                item.layer = command.layer;
+                item.frame = command.frame;
+                timeline_commands.push_back(std::move(item));
+                timeline_plan_indices.push_back(index);
+            } else if (command.type == EditPlanCommandType::remove) {
+                TimelineCommand item;
+                item.type = TimelineCommandType::remove;
+                item.object_index = command.object_index;
+                timeline_commands.push_back(std::move(item));
+                timeline_plan_indices.push_back(index);
+            } else if (
+                command.type ==
+                EditPlanCommandType::set_effect_enabled) {
+                TimelineCommand item;
+                item.type = TimelineCommandType::set_effect_enabled;
+                item.object_index = command.object_index;
+                item.effect_selector = command.effect;
+                item.enabled = command.enabled;
+                timeline_commands.push_back(std::move(item));
+                timeline_plan_indices.push_back(index);
+            } else if (command.type == EditPlanCommandType::add_effect) {
+                if (command.effect.empty() ||
+                    edit->create_effect == nullptr ||
+                    edit->delete_effect == nullptr ||
+                    edit->get_effect_list == nullptr ||
+                    edit->get_effect_name == nullptr ||
+                    edit->get_effect_enable == nullptr ||
+                    edit->set_effect_enable == nullptr ||
+                    (!command.effect_items.empty() &&
+                     (edit->get_effect_item_value == nullptr ||
+                      edit->set_effect_item_value == nullptr))) {
+                    context.result.error_code =
+                        "EDIT_SECTION_UNAVAILABLE";
+                    context.result.error_message =
+                        "Effect creation is unavailable for this edit plan.";
+                    return;
+                }
+            } else {
+                context.result.error_code = "INVALID_ARGUMENT";
+                context.result.error_message =
+                    "The edit plan contains an unsupported command.";
+                return;
+            }
+        }
+
+        if (!timeline_commands.empty()) {
+            TimelineTransactionContext validation{
+                context.edit_handle,
+                context.expected_revision,
+                &timeline_commands,
+                false,
+                {},
+            };
+            timeline_transaction_callback(&validation, edit);
+            if (!validation.result.ok) {
+                context.result.error_code =
+                    validation.result.error_code;
+                context.result.error_message =
+                    validation.result.error_message;
+                context.result.retryable =
+                    validation.result.retryable;
+                if (validation.result.failed_command_index <
+                    timeline_plan_indices.size()) {
+                    context.result.failed_command_index =
+                        timeline_plan_indices[
+                            validation.result.failed_command_index];
+                }
+                return;
+            }
+        }
+
+        struct FinalPlacement final {
+            int layer = 0;
+            int start = 0;
+            int end = 0;
+            bool removed = false;
+        };
+        std::vector<FinalPlacement> final_placements;
+        final_placements.reserve(timeline.objects.size());
+        for (const CapturedObject& object : timeline.objects) {
+            final_placements.push_back(FinalPlacement{
+                object.layer,
+                object.frame_start,
+                object.frame_end,
+                false,
+            });
+        }
+        for (const EditPlanCommand& command : *context.commands) {
+            if (command.type == EditPlanCommandType::move) {
+                FinalPlacement& placement =
+                    final_placements[command.object_index];
+                const int length =
+                    timeline.objects[command.object_index].frame_end -
+                    timeline.objects[command.object_index].frame_start + 1;
+                placement.layer = command.layer;
+                placement.start = command.frame;
+                placement.end = command.frame + length - 1;
+            } else if (command.type == EditPlanCommandType::remove) {
+                final_placements[command.object_index].removed = true;
+            }
+        }
+        for (std::size_t create_index = 0U;
+             create_index < create_placements.size();
+             ++create_index) {
+            const CreateAliasCommand& creation =
+                create_placements[create_index];
+            context.result.failed_command_index =
+                create_plan_indices[create_index];
+            if (creation.frame >
+                std::numeric_limits<int>::max() - creation.length + 1) {
+                context.result.error_code = "INVALID_ARGUMENT";
+                context.result.error_message =
+                    "A planned creation exceeds the timeline range.";
+                return;
+            }
+            if (edit->get_layer_lock != nullptr &&
+                edit->get_layer_lock(creation.layer)) {
+                context.result.error_code = "LAYER_LOCKED";
+                context.result.error_message =
+                    "A planned creation destination layer is locked.";
+                return;
+            }
+            const int creation_end =
+                creation.frame + creation.length - 1;
+            for (std::size_t prior = 0U;
+                 prior < create_index;
+                 ++prior) {
+                if (ranges_overlap(creation, create_placements[prior])) {
+                    context.result.error_code = "PLACEMENT_COLLISION";
+                    context.result.error_message =
+                        "Planned creations overlap each other.";
+                    return;
+                }
+            }
+            for (const FinalPlacement& placement : final_placements) {
+                if (!placement.removed &&
+                    placement.layer == creation.layer &&
+                    placement.start <= creation_end &&
+                    creation.frame <= placement.end) {
+                    context.result.error_code = "PLACEMENT_COLLISION";
+                    context.result.error_message =
+                        "A planned creation overlaps the final timeline layout.";
+                    return;
+                }
+            }
+        }
+        context.result.valid = true;
+        context.result.failed_command_index =
+            std::numeric_limits<std::size_t>::max();
+        if (!context.apply) {
+            context.result.ok = true;
+            return;
+        }
+
+        std::vector<CreatedPlanObject> created_objects;
+        std::vector<CreatedPlanEffect> created_effects;
+        std::vector<HeldPlanObject> held_objects;
+        const auto rollback = [&]() noexcept {
+            context.result.rollback_attempted =
+                !created_objects.empty() || !created_effects.empty() ||
+                !held_objects.empty();
+            bool complete = true;
+            for (auto iterator = created_effects.rbegin();
+                 iterator != created_effects.rend();
+                 ++iterator) {
+                if (!edit->delete_effect(
+                        iterator->object,
+                        iterator->effect)) {
+                    complete = false;
+                } else {
+                    ++context.result.restored_count;
+                }
+            }
+            for (auto iterator = created_objects.rbegin();
+                 iterator != created_objects.rend();
+                 ++iterator) {
+                if (iterator->object == nullptr ||
+                    edit->delete_object == nullptr) {
+                    complete = false;
+                } else {
+                    edit->delete_object(iterator->object);
+                    ++context.result.restored_count;
+                }
+                if (iterator->media) {
+                    complete = false;
+                }
+            }
+            for (auto iterator = held_objects.rbegin();
+                 iterator != held_objects.rend();
+                 ++iterator) {
+                if (edit->move_object == nullptr ||
+                    !edit->move_object(
+                        iterator->object,
+                        iterator->layer,
+                        iterator->frame)) {
+                    complete = false;
+                } else {
+                    ++context.result.restored_count;
+                }
+            }
+            context.result.rollback_complete = complete;
+            context.result.gui_undo_required = !complete;
+        };
+        const auto apply_effect_to_object = [&context, &created_effects, edit](
+            const OBJECT_HANDLE object,
+            const std::wstring& effect_name,
+            const std::vector<EffectInitialItem>& items,
+            const bool enabled) -> bool {
+            const EFFECT_HANDLE effect = edit->create_effect(
+                object,
+                effect_name.c_str());
+            if (effect == nullptr) {
+                context.result.error_code = "PLAN_APPLY_FAILED";
+                context.result.error_message =
+                    "AviUtl2 rejected a planned effect.";
+                return false;
+            }
+            created_effects.push_back({object, effect});
+            const LPCWSTR actual_name = edit->get_effect_name(effect);
+            if (actual_name == nullptr || actual_name != effect_name) {
+                context.result.error_code = "EFFECT_READBACK_MISMATCH";
+                context.result.error_message =
+                    "AviUtl2 created a different effect than requested.";
+                return false;
+            }
+            for (const EffectInitialItem& item : items) {
+                if (edit->get_effect_item_value(
+                        effect,
+                        item.item.c_str()) == nullptr ||
+                    !edit->set_effect_item_value(
+                        effect,
+                        item.item.c_str(),
+                        item.value.c_str())) {
+                    context.result.error_code = "PLAN_APPLY_FAILED";
+                    context.result.error_message =
+                        "AviUtl2 rejected a planned effect item value.";
+                    return false;
+                }
+                const LPCSTR actual = edit->get_effect_item_value(
+                    effect,
+                    item.item.c_str());
+                if (actual == nullptr ||
+                    !equivalent_alias_value(item.value, actual)) {
+                    context.result.error_code =
+                        "EFFECT_READBACK_MISMATCH";
+                    context.result.error_message =
+                        "AviUtl2 normalized or ignored a planned effect item.";
+                    return false;
+                }
+            }
+            edit->set_effect_enable(effect, enabled);
+            if (edit->get_effect_enable(effect) != enabled) {
+                context.result.error_code = "EFFECT_READBACK_MISMATCH";
+                context.result.error_message =
+                    "AviUtl2 rejected the planned effect enabled state.";
+                return false;
+            }
+            const int effect_count =
+                edit->get_effect_list(object, nullptr, 0);
+            if (effect_count <= 0 ||
+                static_cast<std::size_t>(effect_count) >
+                    kMaxInspectEffects) {
+                context.result.error_code =
+                    "EFFECT_READBACK_MISMATCH";
+                context.result.error_message =
+                    "AviUtl2 returned an invalid post-create effect list.";
+                return false;
+            }
+            std::vector<EFFECT_HANDLE> actual_effects(
+                static_cast<std::size_t>(effect_count));
+            if (edit->get_effect_list(
+                    object,
+                    actual_effects.data(),
+                    effect_count) != effect_count) {
+                context.result.error_code =
+                    "EFFECT_READBACK_MISMATCH";
+                context.result.error_message =
+                    "AviUtl2 returned an unstable post-create effect list.";
+                return false;
+            }
+            const auto current = std::find(
+                actual_effects.begin(),
+                actual_effects.end(),
+                effect);
+            if (current == actual_effects.end()) {
+                context.result.error_code =
+                    "EFFECT_READBACK_MISMATCH";
+                context.result.error_message =
+                    "The created effect is absent from the object effect list.";
+                return false;
+            }
+            for (const CreatedPlanEffect& previous : created_effects) {
+                if (previous.object != object || previous.effect == effect) {
+                    continue;
+                }
+                const auto previous_position = std::find(
+                    actual_effects.begin(),
+                    actual_effects.end(),
+                    previous.effect);
+                if (previous_position == actual_effects.end() ||
+                    previous_position >= current) {
+                    context.result.error_code =
+                        "EFFECT_READBACK_MISMATCH";
+                    context.result.error_message =
+                        "AviUtl2 changed the requested effect stack order.";
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        std::set<OBJECT_HANDLE> known_objects;
+        for (const CapturedObject& object : timeline.objects) {
+            known_objects.insert(object.handle);
+        }
+        const auto capture_media_group =
+            [&context, &known_objects, edit](
+                const OBJECT_HANDLE primary,
+                std::vector<OBJECT_HANDLE>& group) -> bool {
+            CapturedTimeline current;
+            if (!capture_timeline(
+                    context.edit_handle,
+                    edit,
+                    current,
+                    context.result.error_code,
+                    context.result.error_message)) {
+                return false;
+            }
+            for (const CapturedObject& candidate : current.objects) {
+                if (known_objects.insert(candidate.handle).second) {
+                    group.push_back(candidate.handle);
+                }
+            }
+            if (std::find(group.begin(), group.end(), primary) ==
+                group.end()) {
+                context.result.error_code =
+                    "MEDIA_GROUP_VERIFICATION_FAILED";
+                context.result.error_message =
+                    "The primary media object is absent from the created object group.";
+                return false;
+            }
+            return true;
+        };
+        const auto media_effect_target = [&context, edit](
+            const OBJECT_HANDLE primary,
+            const std::vector<OBJECT_HANDLE>& group,
+            const EditPlanEffectScope scope) -> OBJECT_HANDLE {
+            if (scope == EditPlanEffectScope::primary) {
+                return primary;
+            }
+            std::vector<OBJECT_HANDLE> video_matches;
+            std::vector<OBJECT_HANDLE> dedicated_audio_matches;
+            std::vector<OBJECT_HANDLE> combined_audio_matches;
+            for (const OBJECT_HANDLE candidate : group) {
+                const int effect_count =
+                    edit->get_effect_list(candidate, nullptr, 0);
+                if (effect_count <= 0 ||
+                    static_cast<std::size_t>(effect_count) >
+                        kMaxInspectEffects) {
+                    context.result.error_code =
+                        "MEDIA_EFFECT_ROUTE_FAILED";
+                    context.result.error_message =
+                        "A created media object has no stable effect list for domain routing.";
+                    return nullptr;
+                }
+                std::vector<EFFECT_HANDLE> effects(
+                    static_cast<std::size_t>(effect_count));
+                if (edit->get_effect_list(
+                        candidate,
+                        effects.data(),
+                        effect_count) != effect_count) {
+                    context.result.error_code =
+                        "MEDIA_EFFECT_ROUTE_FAILED";
+                    context.result.error_message =
+                        "A created media object returned an unstable effect list for domain routing.";
+                    return nullptr;
+                }
+                bool video = false;
+                bool dedicated_audio = false;
+                bool combined_audio = false;
+                for (const EFFECT_HANDLE effect : effects) {
+                    const LPCWSTR name = edit->get_effect_name(effect);
+                    if (name == nullptr) {
+                        context.result.error_code =
+                            "MEDIA_EFFECT_ROUTE_FAILED";
+                        context.result.error_message =
+                            "A created media object contains an unnamed effect.";
+                        return nullptr;
+                    }
+                    dedicated_audio = dedicated_audio ||
+                        std::wcscmp(name, L"音声ファイル") == 0 ||
+                        std::wcscmp(name, L"音声再生") == 0;
+                    combined_audio = combined_audio ||
+                        std::wcscmp(name, L"映像再生") == 0;
+                    video = video ||
+                        std::wcscmp(name, L"動画ファイル") == 0 ||
+                        std::wcscmp(name, L"画像ファイル") == 0 ||
+                        std::wcscmp(name, L"標準描画") == 0 ||
+                        std::wcscmp(name, L"映像再生") == 0;
+                }
+                if (video) {
+                    video_matches.push_back(candidate);
+                }
+                if (dedicated_audio) {
+                    dedicated_audio_matches.push_back(candidate);
+                } else if (combined_audio) {
+                    combined_audio_matches.push_back(candidate);
+                }
+            }
+            const auto unique = [](const std::vector<OBJECT_HANDLE>& matches) {
+                return matches.size() == 1U ? matches.front() : nullptr;
+            };
+            if (scope == EditPlanEffectScope::video) {
+                const OBJECT_HANDLE match = unique(video_matches);
+                if (match != nullptr) {
+                    return match;
+                }
+            } else if (scope == EditPlanEffectScope::audio) {
+                const OBJECT_HANDLE dedicated = unique(dedicated_audio_matches);
+                if (dedicated != nullptr) {
+                    return dedicated;
+                }
+                if (dedicated_audio_matches.empty()) {
+                    const OBJECT_HANDLE combined = unique(combined_audio_matches);
+                    if (combined != nullptr) {
+                        return combined;
+                    }
+                }
+            }
+            context.result.error_code =
+                "MEDIA_EFFECT_ROUTE_FAILED";
+            context.result.error_message =
+                "The requested Effect domain did not resolve to one dedicated or combined media object.";
+            return nullptr;
+        };
+
+        if (!timeline_commands.empty()) {
+            if (edit->move_object == nullptr) {
+                context.result.error_code = "EDIT_SECTION_UNAVAILABLE";
+                context.result.error_message =
+                    "Scratch placement is unavailable for this mixed edit plan.";
+                return;
+            }
+            std::int64_t scratch = 0;
+            for (const CapturedObject& object : timeline.objects) {
+                scratch = (std::max)(
+                    scratch,
+                    static_cast<std::int64_t>(object.frame_end) + 1);
+            }
+            for (const CreateAliasCommand& creation : create_placements) {
+                scratch = (std::max)(
+                    scratch,
+                    static_cast<std::int64_t>(creation.frame) +
+                        creation.length);
+            }
+            std::set<std::size_t> held_indices;
+            for (std::size_t index = 0U;
+                 index < context.commands->size();
+                 ++index) {
+                const EditPlanCommand& command = (*context.commands)[index];
+                if ((command.type != EditPlanCommandType::move &&
+                     command.type != EditPlanCommandType::remove) ||
+                    !held_indices.insert(command.object_index).second) {
+                    continue;
+                }
+                const CapturedObject& object =
+                    timeline.objects[command.object_index];
+                const int length =
+                    object.frame_end - object.frame_start + 1;
+                context.result.failed_command_index = index;
+                if (scratch >
+                        std::numeric_limits<int>::max() - length + 1 ||
+                    !edit->move_object(
+                        object.handle,
+                        object.layer,
+                        static_cast<int>(scratch))) {
+                    context.result.error_code = "PLAN_SCRATCH_FAILED";
+                    context.result.error_message =
+                        "AviUtl2 rejected scratch placement for a plan target.";
+                    rollback();
+                    return;
+                }
+                held_objects.push_back(HeldPlanObject{
+                    object.handle,
+                    object.layer,
+                    object.frame_start,
+                });
+                scratch += length;
+            }
+        }
+
+        for (std::size_t index = 0U;
+             index < context.commands->size();
+             ++index) {
+            const EditPlanCommand& command = (*context.commands)[index];
+            context.result.failed_command_index = index;
+            if (command.type == EditPlanCommandType::create_alias) {
+                const OBJECT_HANDLE object =
+                    edit->create_object_from_alias(
+                        command.alias.c_str(),
+                        command.layer,
+                        command.frame,
+                        command.length);
+                if (object == nullptr) {
+                    context.result.error_code = "PLAN_APPLY_FAILED";
+                    context.result.error_message =
+                        "AviUtl2 rejected a planned Alias object.";
+                    rollback();
+                    return;
+                }
+                created_objects.push_back({object, false});
+                known_objects.insert(object);
+                for (const EditPlanEffect& planned : command.effects) {
+                    if (!apply_effect_to_object(
+                            object,
+                            planned.effect,
+                            planned.items,
+                            planned.enabled)) {
+                        rollback();
+                        return;
+                    }
+                }
+            } else if (
+                command.type == EditPlanCommandType::create_media) {
+                const OBJECT_HANDLE object =
+                    edit->create_object_from_media_file(
+                        command.file.c_str(),
+                        command.layer,
+                        command.frame,
+                        command.length);
+                if (object == nullptr) {
+                    context.result.error_code = "PLAN_APPLY_FAILED";
+                    context.result.error_message =
+                        "AviUtl2 rejected a planned media object.";
+                    rollback();
+                    return;
+                }
+                created_objects.push_back({object, true});
+                std::vector<OBJECT_HANDLE> media_group;
+                if (!capture_media_group(object, media_group)) {
+                    rollback();
+                    return;
+                }
+                for (const ObjectItemUpdate& update :
+                     command.updates) {
+                    std::vector<OBJECT_HANDLE> item_targets;
+                    for (const OBJECT_HANDLE candidate : media_group) {
+                        if (edit->get_object_item_value(
+                                candidate,
+                                update.effect.c_str(),
+                                update.item.c_str()) != nullptr) {
+                            item_targets.push_back(candidate);
+                        }
+                    }
+                    if (item_targets.size() != 1U) {
+                        context.result.error_code =
+                            "MEDIA_ITEM_ROUTE_FAILED";
+                        context.result.error_message =
+                            "A planned media item did not resolve to exactly one created object.";
+                        rollback();
+                        return;
+                    }
+                    if (!edit->set_object_item_value(
+                            item_targets.front(),
+                            update.effect.c_str(),
+                            update.item.c_str(),
+                            update.value.c_str())) {
+                        context.result.error_code =
+                            "PLAN_APPLY_FAILED";
+                        context.result.error_message =
+                            "AviUtl2 rejected a planned media item value.";
+                        rollback();
+                        return;
+                    }
+                    const LPCSTR actual = edit->get_object_item_value(
+                        item_targets.front(),
+                        update.effect.c_str(),
+                        update.item.c_str());
+                    if (actual == nullptr ||
+                        !equivalent_alias_value(update.value, actual)) {
+                        context.result.error_code =
+                            "MEDIA_ITEM_READBACK_MISMATCH";
+                        context.result.error_message =
+                            "AviUtl2 normalized or ignored a planned media item value.";
+                        rollback();
+                        return;
+                    }
+                }
+                for (const EditPlanEffect& planned : command.effects) {
+                    const OBJECT_HANDLE target = media_effect_target(
+                        object,
+                        media_group,
+                        planned.scope);
+                    if (target == nullptr) {
+                        rollback();
+                        return;
+                    }
+                    if (!apply_effect_to_object(
+                            target,
+                            planned.effect,
+                            planned.items,
+                            planned.enabled)) {
+                        rollback();
+                        return;
+                    }
+                }
+            } else if (command.type == EditPlanCommandType::add_effect) {
+                CapturedObject& object =
+                    timeline.objects[command.object_index];
+                if (!apply_effect_to_object(
+                        object.handle,
+                        command.effect,
+                        command.effect_items,
+                        command.enabled)) {
+                    rollback();
+                    return;
+                }
+            }
+        }
+
+        if (!timeline_commands.empty()) {
+            CapturedTimeline after_creates;
+            std::string capture_error;
+            std::string capture_message;
+            if (!capture_timeline(
+                    context.edit_handle,
+                    edit,
+                    after_creates,
+                    capture_error,
+                    capture_message)) {
+                context.result.error_code = std::move(capture_error);
+                context.result.error_message = std::move(capture_message);
+                rollback();
+                return;
+            }
+            std::vector<TimelineCommand> remapped_commands =
+                timeline_commands;
+            for (TimelineCommand& command : remapped_commands) {
+                const OBJECT_HANDLE target =
+                    timeline.objects[command.object_index].handle;
+                const auto found = std::find_if(
+                    after_creates.objects.begin(),
+                    after_creates.objects.end(),
+                    [&](const CapturedObject& candidate) {
+                        return candidate.handle == target;
+                    });
+                if (found == after_creates.objects.end()) {
+                    context.result.error_code = "OBJECT_NOT_FOUND";
+                    context.result.error_message =
+                        "A plan target disappeared before final mutation.";
+                    rollback();
+                    return;
+                }
+                command.object_index = static_cast<std::size_t>(
+                    std::distance(after_creates.objects.begin(), found));
+            }
+            TimelineTransactionContext mutation{
+                context.edit_handle,
+                after_creates.revision,
+                &remapped_commands,
+                true,
+                {},
+            };
+            timeline_transaction_callback(&mutation, edit);
+            if (!mutation.result.ok) {
+                context.result.error_code = mutation.result.error_code;
+                context.result.error_message =
+                    mutation.result.error_message;
+                context.result.retryable = mutation.result.retryable;
+                if (mutation.result.failed_command_index <
+                    timeline_plan_indices.size()) {
+                    context.result.failed_command_index =
+                        timeline_plan_indices[
+                            mutation.result.failed_command_index];
+                }
+                rollback();
+                return;
+            }
+        }
+        context.result.applied_count = context.commands->size();
+        context.result.failed_command_index =
+            std::numeric_limits<std::size_t>::max();
+        context.result.ok = true;
+    } catch (const std::exception& error) {
+        context.result.error_code = "EDIT_PLAN_FAILED";
+        context.result.error_message = error.what();
+    } catch (...) {
+        context.result.error_code = "EDIT_PLAN_FAILED";
+        context.result.error_message =
+            "The edit plan failed inside the SDK callback.";
+    }
+}
+
 struct StringCatalogContext final {
     StringCatalogResult result;
     std::size_t limit = 0U;
@@ -5238,6 +6151,216 @@ HostSdkAdapter::run_timeline_transaction(
         if (snapshot.ok) {
             context.result.current_revision =
                 snapshot.revision;
+        }
+    }
+    return std::move(context.result);
+}
+
+EditPlanResult HostSdkAdapter::run_edit_plan(
+    const std::int64_t expected_revision,
+    const std::vector<EditPlanCommand>& commands,
+    const bool apply) noexcept {
+    if (edit_handle_ == nullptr ||
+        (apply && edit_handle_->call_edit_section_param == nullptr) ||
+        (!apply && edit_handle_->call_read_section_param == nullptr)) {
+        EditPlanResult result;
+        result.error_code =
+            apply ? "EDIT_SECTION_UNAVAILABLE" : "READ_SECTION_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 mixed edit-plan section is unavailable.";
+        result.retryable = true;
+        return result;
+    }
+    if (get_edit_state() == EditState::save) {
+        EditPlanResult result;
+        result.error_code = "HOST_EXPORTING";
+        result.error_message = "AviUtl2 is currently exporting.";
+        result.retryable = true;
+        return result;
+    }
+    try {
+        bool needs_catalog = false;
+        for (const EditPlanCommand& command : commands) {
+            needs_catalog = needs_catalog ||
+                command.type == EditPlanCommandType::add_effect ||
+                !command.effects.empty() ||
+                (command.type == EditPlanCommandType::create_media &&
+                 !command.updates.empty());
+        }
+        if (needs_catalog) {
+            std::vector<CatalogEffect> catalog;
+            std::size_t start = 0U;
+            while (true) {
+                EffectCatalogResult page = get_effect_catalog(
+                    start,
+                    kMaxCatalogPageEffects);
+                if (!page.ok) {
+                    EditPlanResult result;
+                    result.error_code = page.error_code;
+                    result.error_message = page.error_message;
+                    result.retryable = page.retryable;
+                    return result;
+                }
+                catalog.insert(
+                    catalog.end(),
+                    std::make_move_iterator(page.effects.begin()),
+                    std::make_move_iterator(page.effects.end()));
+                start += page.effects.size();
+                if (start >= page.total) {
+                    break;
+                }
+                if (page.effects.empty()) {
+                    EditPlanResult result;
+                    result.error_code = "EFFECT_CATALOG_FAILED";
+                    result.error_message =
+                        "AviUtl2 returned invalid effect catalog paging.";
+                    return result;
+                }
+            }
+            const auto schema_matches = [&](
+                const std::wstring& effect,
+                const std::wstring& item) {
+                const std::string effect_utf8 = wide_to_utf8(effect);
+                const std::string item_utf8 = wide_to_utf8(item);
+                std::size_t effect_matches = 0U;
+                bool item_found = false;
+                for (const CatalogEffect& candidate : catalog) {
+                    if (candidate.name != effect_utf8) {
+                        continue;
+                    }
+                    ++effect_matches;
+                    item_found = item_found || std::any_of(
+                        candidate.items.begin(),
+                        candidate.items.end(),
+                        [&](const CatalogItem& candidate_item) {
+                            return candidate_item.name == item_utf8;
+                        });
+                }
+                return effect_matches == 1U && item_found;
+            };
+            for (std::size_t index = 0U;
+                 index < commands.size();
+                 ++index) {
+                const EditPlanCommand& command = commands[index];
+                for (const EditPlanEffect& planned : command.effects) {
+                    const std::string effect_utf8 =
+                        wide_to_utf8(planned.effect);
+                    const CatalogEffect* match = nullptr;
+                    std::size_t matches = 0U;
+                    for (const CatalogEffect& candidate : catalog) {
+                        if (candidate.name == effect_utf8) {
+                            match = &candidate;
+                            ++matches;
+                        }
+                    }
+                    const int required_flag =
+                        planned.scope == EditPlanEffectScope::audio
+                            ? 2
+                            : planned.scope == EditPlanEffectScope::video
+                                  ? 1
+                                  : 0;
+                    if (matches != 1U || match == nullptr ||
+                        (required_flag != 0 &&
+                         (match->flags & required_flag) == 0) ||
+                        std::any_of(
+                            planned.items.begin(),
+                            planned.items.end(),
+                            [&](const EffectInitialItem& item) {
+                                return !schema_matches(planned.effect, item.item);
+                            })) {
+                        EditPlanResult result;
+                        result.failed_command_index = index;
+                        result.error_code = "EFFECT_SCHEMA_NOT_FOUND";
+                        result.error_message =
+                            "A create-time effect, scope, or item is absent from the live catalog.";
+                        return result;
+                    }
+                }
+                if (command.type == EditPlanCommandType::add_effect) {
+                    const std::string effect_utf8 =
+                        wide_to_utf8(command.effect);
+                    const auto matching_effects = std::count_if(
+                        catalog.begin(),
+                        catalog.end(),
+                        [&](const CatalogEffect& candidate) {
+                            return candidate.name == effect_utf8;
+                        });
+                    if (matching_effects != 1 ||
+                        std::any_of(
+                            command.effect_items.begin(),
+                            command.effect_items.end(),
+                            [&](const EffectInitialItem& item) {
+                                return !schema_matches(
+                                    command.effect,
+                                    item.item);
+                            })) {
+                        EditPlanResult result;
+                        result.failed_command_index = index;
+                        result.error_code = "EFFECT_SCHEMA_NOT_FOUND";
+                        result.error_message =
+                            "A planned effect or initial item is absent from the live catalog.";
+                        return result;
+                    }
+                } else if (
+                    command.type == EditPlanCommandType::create_media &&
+                    std::any_of(
+                        command.updates.begin(),
+                        command.updates.end(),
+                        [&](const ObjectItemUpdate& update) {
+                            return !schema_matches(
+                                update.effect,
+                                update.item);
+                        })) {
+                    EditPlanResult result;
+                    result.failed_command_index = index;
+                    result.error_code = "EFFECT_SCHEMA_NOT_FOUND";
+                    result.error_message =
+                        "A planned media item is absent from the live catalog.";
+                    return result;
+                }
+            }
+        }
+    } catch (const std::exception& error) {
+        EditPlanResult result;
+        result.error_code = "EFFECT_CATALOG_FAILED";
+        result.error_message = error.what();
+        return result;
+    } catch (...) {
+        EditPlanResult result;
+        result.error_code = "EFFECT_CATALOG_FAILED";
+        result.error_message =
+            "The effect catalog could not validate the edit plan.";
+        return result;
+    }
+    EditPlanContext context{
+        edit_handle_,
+        expected_revision,
+        &commands,
+        apply,
+        {},
+    };
+    const bool opened =
+        apply
+            ? edit_handle_->call_edit_section_param(
+                  &context,
+                  edit_plan_callback)
+            : edit_handle_->call_read_section_param(
+                  &context,
+                  edit_plan_callback);
+    if (!opened) {
+        EditPlanResult result;
+        result.error_code =
+            apply ? "EDIT_SECTION_UNAVAILABLE" : "READ_SECTION_UNAVAILABLE";
+        result.error_message =
+            "AviUtl2 could not open the mixed edit-plan section.";
+        result.retryable = true;
+        return result;
+    }
+    if (apply && context.result.ok) {
+        context.result.current_revision = -1;
+        SnapshotResult snapshot = get_snapshot();
+        if (snapshot.ok) {
+            context.result.current_revision = snapshot.revision;
         }
     }
     return std::move(context.result);

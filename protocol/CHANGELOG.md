@@ -1,5 +1,62 @@
 # Live Bridge protocol changelog
 
+## Protocol v1 - plugin/client 0.9.5
+
+- Added the backend-neutral `effect(profile, ...)` and `native_effect()`
+  specifications. Twenty versioned standard profiles share one project-format
+  `2001901` compatibility manifest between Live Bridge and `.aup2` generation.
+- Added ordered create-time `effects[]` to Alias and native-media commands.
+  The host validates catalog name, item schema, domain and limits before the
+  edit section, then verifies every value, enabled state and stack order by
+  SDK readback. A mismatch is rolled back and never reported as success.
+- Added `apply_effects()` and `validate_standard_effects()` for `.aup2` models.
+  Standard Effects are emitted as complete templates after standard
+  drawing/playback Effects, matching AviUtl2's Open/Save canonical order, and
+  IDs are renumbered so serialization preserves that order.
+- Manifest `2001901` explicitly accepts both generated project version
+  `2001901` and AviUtl2 Open/Save version `2010200`; unknown future versions
+  still fail closed. The canonical `effect.disable=1` metadata is preserved
+  and validated for disabled standard Effects.
+- Added a semantic Open/Save comparator which ignores known default additions,
+  numeric formatting, IDs, property order and `Group2`/`Group3`, while treating
+  Effect fallback, removal, reorder and explicit-value changes as failures.
+- General text is no longer inferred to be subtitles. Live subtitle overlap is
+  opt-in with `subtitle_overlap="warn"` or `"error"`; legacy CLI
+  `--warn-overlap` remains an explicit diagnostic.
+- Added capability keys for semantic profiles, native fallback, create-time
+  stacks, media-group routing, linear values and the `.aup2` manifest version.
+- Media-group routing accepts both separate video/audio objects and AviUtl2's
+  combined `動画ファイル` + `映像再生` object. Native video transforms target
+  `映像再生`; combined audio Effects may intentionally share the video object.
+- Protocol v1 remains additive and backward compatible. A 0.9.4 plugin only
+  receives the documented single-effect fallback; create-time stacks fail
+  closed rather than being split into multiple Undo units.
+
+## Protocol v1 - plugin/client 0.9.4
+
+- Added backend-neutral Python `EditPlan` intents and the stateful `LiveProject`
+  facade. Cursor placement, serial/parallel sequencing, native media duration,
+  free-layer selection, compact search, revision refresh, and operation IDs are
+  managed by the facade.
+- Added high-level `linear(start, end)` transforms for animated text/shape
+  creation and semantic `star`, `heart`, and `background` basic shapes. They
+  compile to native Alias tracks without exposing localized item names.
+- Added additive `edit.plan.validate` and `edit.plan.apply` methods for mixed
+  Alias/media creation, existing-object item/name/placement updates, deletion,
+  effect creation, and effect enable state.
+- Unified plans preflight every target, revision, lock, item, media path, and
+  final placement. Move/delete targets can be held at scratch positions so a
+  creation may safely occupy a range freed by the same plan.
+- Successful unified plans use one AviUtl2 edit section and report
+  `undo_grouped: true`, `atomic: false`, per-command status, and fresh revision.
+  Failures expose best-effort rollback status and whether GUI Undo is required;
+  partial application is never hidden.
+- Added legacy Python fallback: Alias-only plans use `batch.apply`, supported
+  existing-object plans use `timeline.transaction.apply`, and mixed plans are
+  refused against older plugins.
+- Protocol v1 remains backward compatible. Project save/export/playback and API
+  lock removal remain intentionally absent.
+
 ## Protocol v1 - plugin/client 0.9.3
 
 - Fixed `project.get_snapshot` for objects that occupy multiple timeline

@@ -21,6 +21,29 @@ AviUtl ver.2 uses a text-based project format (.aup2) similar to INI files. This
 - **Live Bridge (experimental)**: Connect to the currently open AviUtl2 project over
   a local Windows named pipe
 
+## What's New in 0.9.5
+
+0.9.5 is a major Live Bridge usability update. New code should start with
+`LiveProject`; the lower-level `LiveClient` remains compatible and is now the
+documented escape hatch for raw Alias/item access.
+
+- Short operations such as `add_text()`, `add_video()`, `update()`, `find()`,
+  `split()`, `trim()`, and native `render()` are available directly on
+  `LiveProject`.
+- `EditPlan` validates and applies multiple object/media/effect changes as one
+  grouped AviUtl2 GUI Undo unit whenever the host accepts the plan.
+- `effect("glow", ...)` and 19 other semantic Effect profiles use natural units
+  and are shared by Live Bridge and in-memory `.aup2` generation.
+- Cursor placement, free-layer selection, revision/operation IDs, compact
+  snapshots, media duration, and combined MP4 video/audio routing are handled
+  by the high-level API.
+- General text overlap is no longer treated as subtitle overlap unless subtitle
+  layers and `warn`/`error` policy are explicitly requested.
+
+See the [Agent Quick Start](docs/LIVE_BRIDGE_AGENT_QUICK_START.md), the
+[complete API manual](docs/LIVE_BRIDGE_AGENT_API_MANUAL.md), and the
+[v0.9.5 release notes](docs/releases/v0.9.5.md).
+
 ## Installation
 
 ```bash
@@ -84,51 +107,77 @@ serialize_to_file(project, "output.aup2")
 json_data = to_json(project)
 ```
 
-### Live Bridge (0.9.3 beta)
+### Live Bridge (0.9.5 beta)
 
-The typed Python client and thin `.aux2` plugin add live access without changing
-the existing `.aup2` workflow:
+`LiveProject` is the standard entry point for short, revision-safe edits of the
+project currently open in AviUtl2:
 
 ```python
-from aviutl2_api.live import (
-    CreateFromAliasCommand,
-    LiveClient,
-    make_text_object,
-)
+from aviutl2_api.editing import effect
+from aviutl2_api.live import LiveProject
 
-with LiveClient.connect() as client:
-    print(client.hello())
-    print(client.get_project_info())
-
-    title = make_text_object(
-        "AviUtl2本体へライブ追加",
-        layer=0,
-        frame=0,
-        length=90,
+with LiveProject.connect(pid=12345) as project:
+    title = project.add_text(
+        "第一章",
+        duration=90,
+        y=-200,
         size=64,
+        effects=[
+            effect("glow", strength=50, color="#FFD966"),
+            effect("outline", size_px=4, color="#202040"),
+        ],
     )
-    command = CreateFromAliasCommand.from_object(
-        title,
-        client_id="title",
+    title = project.update(
+        title.primary,
+        x=120,
+        scale=110,
     )
-    client.validate_batch([command])
-    client.apply_batch([command])  # One AviUtl2 Undo unit
+    png = project.render(title.primary.midpoint).png
 ```
 
-Phase 2 serializes the existing Python object models as Alias data, but delegates
-the canonical parsing and actual edit to the AviUtl2 SDK. The bridge is local
-Windows-only and does not interpret natural language. See
-[`docs/LIVE_BRIDGE_DEVELOPMENT.md`](docs/LIVE_BRIDGE_DEVELOPMENT.md) for the native
-build and AviUtl2 installation procedure, and
-[`docs/LIVE_BRIDGE_PROTOCOL.md`](docs/LIVE_BRIDGE_PROTOCOL.md) for protocol v1.
-AI agents should use
+Omitted `at` uses the GUI cursor frame; omitted `layer` selects the first
+unlocked, collision-free layer from Layer 0. Multiple edits can be validated and
+applied as one GUI Undo unit with `EditPlan`:
+
+```python
+from aviutl2_api.editing import EditPlan, effect, linear
+from aviutl2_api.live import LiveProject
+
+plan = EditPlan(sequence="parallel")
+plan.add_video("intro.mp4", key="intro")
+plan.add_text(
+    "第一章",
+    key="title",
+    duration=90,
+    y=-200,
+    size=80,
+    effects=[effect("glow", strength=50)],
+)
+plan.add_shape(
+    "star",
+    key="star",
+    duration=90,
+    x=linear(900, -900),
+    rotation=linear(0, 360),
+)
+
+with LiveProject.connect(pid=12345) as project:
+    validation = project.validate(plan)
+    if not validation.valid:
+        raise RuntimeError(validation.errors)
+    result = project.apply(plan)
+    title = result.objects["title"].primary
+```
+
+The bridge delegates canonical Alias parsing, media loading, edits, and renders
+to AviUtl2's official SDK. It is local Windows-only and does not interpret
+natural language. `LiveProject.client` is the documented escape hatch for full
+Alias, raw item values, manual revisions, and other advanced endpoints. AI
+agents should start with
+[`docs/LIVE_BRIDGE_AGENT_QUICK_START.md`](docs/LIVE_BRIDGE_AGENT_QUICK_START.md)
+and open
 [`docs/LIVE_BRIDGE_AGENT_API_MANUAL.md`](docs/LIVE_BRIDGE_AGENT_API_MANUAL.md)
-as the complete operational and API reference.
-The API lock threat model and adversarial test procedure are documented in
-[`docs/LIVE_BRIDGE_SECURITY.md`](docs/LIVE_BRIDGE_SECURITY.md).
-The current end-to-end workflow coverage and the remaining requirements for
-agent-driven production editing are tracked in
-[`docs/LIVE_BRIDGE_AGENT_WORKFLOW_GAPS.md`](docs/LIVE_BRIDGE_AGENT_WORKFLOW_GAPS.md).
+only when a complete reference or advanced operation is needed.
 
 External API access starts disabled in every AviUtl2 process. Open that window's
 `設定 > 外部API連携設定...` menu, then check
@@ -148,9 +197,16 @@ named pipe and removes its discovery entry. If more than one process is enabled,
 automatic selection is rejected and the target must be explicit:
 
 ```python
+from aviutl2_api.live import LiveClient
+
 with LiveClient.connect(pid=12345) as client:
     print(client.get_project_info())
 ```
+
+#### Advanced: low-level `LiveClient`
+
+Use the following APIs when full Alias data, raw localized item values, explicit
+revision handling, or an endpoint not wrapped by `LiveProject` is required.
 
 Existing objects can be edited through revision-scoped snapshots:
 
@@ -282,10 +338,75 @@ session-idempotent.
 timeline layers. Such objects are returned once on their base layer instead of
 causing `INVALID_HOST_OBJECT_RANGE`.
 
+0.9.4 adds `LiveProject`, backend-neutral `EditPlan`, automatic cursor/layer
+placement, compact object search, and mixed `edit.plan.validate/apply`. Native
+mixed plans validate their final layout first, run inside one edit section, and
+return an explicit best-effort rollback receipt on failure. They intentionally
+report `atomic=False` because the current SDK cannot guarantee rollback of every
+linked object created by third-party media/effect implementations.
+
+0.9.5 adds a shared semantic Effect API for Live Bridge and `.aup2` models.
+Twenty curated profiles use natural units and are checked against the running
+host's exact catalog before editing:
+
+```python
+from aviutl2_api.editing import effect
+
+title = project.add_text(
+    "第一章",
+    effects=[
+        effect("glow", strength=50, color="#FFD966"),
+        effect("outline", size_px=4, color="#202040"),
+    ],
+)
+blur = project.apply_effect(title.primary, effect("blur", radius_px=8))
+title_object = project.find(text="第一章").one()
+blur = project.update_effect(
+    title_object,
+    blur,
+    effect("blur", radius_px=12),
+)
+print(project.available_effect_profiles())
+```
+
+Native media may be returned as separate video/audio objects or as one combined
+`映像再生` object. `effects=` routes both forms; a combined MP4 legitimately
+reports the same object ID for video- and audio-domain Effects.
+
+Unknown or third-party effects remain available explicitly through
+`native_effect()` or `LiveProject.client`; their meaning is never guessed.
+Create-time stacks preserve order, duplicates and enabled state and remain one
+GUI Undo unit. A 0.9.4 plugin refuses a create-time stack instead of splitting
+it into several Undo operations.
+
+The same Effect specification can be applied to an in-memory `.aup2` model:
+
+```python
+from aviutl2_api import apply_effects, validate_standard_effects
+from aviutl2_api.editing import effect
+
+apply_effects(
+    project_model,
+    timeline_object,
+    effect("glow", strength=50, color="#FFD966"),
+    effect("outline", size_px=4),
+)
+assert validate_standard_effects(project_model).valid
+```
+
+`apply_effects()` does not save a file. It inserts complete versioned templates
+after standard drawing/playback Effects, matching AviUtl2's Open/Save canonical
+order, and renumbers Effect IDs. The manifest ID remains `2001901`; the
+explicit compatibility allow-list accepts generated `2001901` projects and
+AviUtl2 Open/Save output upgraded to `2010200`. Unknown future project versions
+still fail closed. Disabled standard Effects use AviUtl2's canonical
+`effect.disable=1` marker. The manual Open/Save gate is available in
+`tests/manual/aup2_effect_roundtrip.py`.
+
 The current official SDK cannot list/create/duplicate/switch scenes or execute
 Undo/Redo. Those capabilities are reported as false, calls fail with
 `SDK_METHOD_UNAVAILABLE`, and the 1.0 release gate remains closed. See
-[`protocol/CAPABILITIES_0.9.3.json`](protocol/CAPABILITIES_0.9.3.json).
+[`protocol/CAPABILITIES_0.9.5.json`](protocol/CAPABILITIES_0.9.5.json).
 
 Render an exact composite frame with the running AviUtl2 process:
 
@@ -307,17 +428,30 @@ This uses AviUtl2's native scene renderer. Pillow/OpenCV are not used to
 reconstruct the scene; PNG compression and verified chunk transport happen
 after AviUtl2 returns its RGBA output.
 
-For a reproducible end-to-end example, start with six free consecutive
-layers and run:
+For the smallest runnable high-level example, enable exactly one Live Bridge
+window and run:
 
 ```powershell
-python examples/live_shooting_star.py --pid 12345 `
-  --output-dir render-tests/shooting-star
+python examples/live_add_title.py
 ```
 
-The example validates placement, creates a 90-frame star and five-part tail
-in one grouped Undo operation, and saves native PNG renders for the start,
-middle, and end frames. It refuses to overwrite occupied target layers.
+It adds one title at the GUI cursor, automatically selects an unlocked free
+layer, and renders the title's midpoint with AviUtl2's native renderer. The PNG
+stays in memory and only its dimensions and SHA-256 are printed. PID selection,
+snapshot refresh, revision checks, operation IDs, and the one-command
+`EditPlan` are handled by `LiveProject`.
+
+The shooting-star example shows high-level animated shapes and text:
+
+```powershell
+python examples/live_shooting_star.py
+```
+
+It uses only `LiveProject`, `EditPlan`, `add_shape()`, `add_text()`, and the
+localized-name-free `linear(start, end)` transform. Cursor placement, free-layer
+selection, Alias generation, revision checks, and one grouped Undo operation are
+automatic. The native three-frame contact sheet stays in memory unless
+the caller explicitly invokes `sheet.save(...)`.
 
 ## CLI Commands
 
@@ -479,8 +613,8 @@ to PyPI using a project-scoped API token and creates a GitHub Release containing
 `AviUtl2LiveBridge.aux2` and its SHA-256 checksum:
 
 ```bash
-git tag v0.9.3
-git push origin v0.9.3
+git tag v0.9.5
+git push origin v0.9.5
 ```
 
 The tag without its leading `v` must exactly match `project.version` in
@@ -495,20 +629,31 @@ empty performs validation only and never publishes.
 
 The plugin is compiled and tested entirely on the Actions `windows-2022`
 runner, which matches the Visual Studio 2022 CMake preset; a local Visual Studio
-installation is not required for publishing.
+installation is not required for publishing. If
+`docs/releases/<tag>.md` exists, the workflow uses it as the GitHub Release body;
+otherwise it falls back to GitHub-generated notes.
 
 ## Documentation
 
-- [CLI Manual](docs/CLI_MANUAL.md) - Detailed CLI documentation
-- [.aup2 Format Specification](docs/aup2_format_specification.md) - File format details
+Start here:
+
+- [Live Bridge Agent Quick Start](docs/LIVE_BRIDGE_AGENT_QUICK_START.md) -
+  Default `LiveProject`/`EditPlan` workflow for AI agents
 - [Live Bridge Agent API Manual](docs/LIVE_BRIDGE_AGENT_API_MANUAL.md) -
-  Complete Python/Wire API and safe agent workflow
+  Complete Python API, safety rules, errors, and advanced operations
+- [v0.9.5 Release Notes](docs/releases/v0.9.5.md) -
+  Upgrade steps, high-level API examples, compatibility, and known constraints
+
+Contributor references:
+
 - [Live Bridge Protocol](docs/LIVE_BRIDGE_PROTOCOL.md) -
-  Protocol framing and implementation contract
-- [Live Bridge Security](docs/LIVE_BRIDGE_SECURITY.md) -
-  API lock and trust-boundary documentation
-- [Live Bridge agent workflow gaps](docs/LIVE_BRIDGE_AGENT_WORKFLOW_GAPS.md) -
-  End-to-end production readiness and SDK requests
+  Low-level wire contract for client/plugin implementers
+- [Live Bridge Development](docs/LIVE_BRIDGE_DEVELOPMENT.md) -
+  Native build, tests, security regression, and manual integration
+- [.aup2 Format Notes](docs/aup2_format_specification.md) -
+  Observed file format and parser/serializer compatibility boundary
+
+CLI syntax is available from `aviutl2 --help` and each subcommand's `--help`.
 
 ## License
 

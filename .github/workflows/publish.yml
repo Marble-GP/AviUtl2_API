@@ -177,6 +177,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Check out release notes
+        uses: actions/checkout@v6
+
       - name: Download plugin artifact
         uses: actions/download-artifact@v8
         with:
@@ -193,12 +196,25 @@ jobs:
             release-assets/AviUtl2LiveBridge.aux2
             release-assets/AviUtl2LiveBridge.aux2.sha256
           )
+          notes_file="docs/releases/${GITHUB_REF_NAME}.md"
 
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            if [[ -f "$notes_file" ]]; then
+              gh release edit "$GITHUB_REF_NAME" \
+                --title "$GITHUB_REF_NAME" \
+                --notes-file "$notes_file"
+            fi
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
-              --verify-tag \
-              --title "$GITHUB_REF_NAME" \
-              --generate-notes
+            if [[ -f "$notes_file" ]]; then
+              gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+                --verify-tag \
+                --title "$GITHUB_REF_NAME" \
+                --notes-file "$notes_file"
+            else
+              gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+                --verify-tag \
+                --title "$GITHUB_REF_NAME" \
+                --generate-notes
+            fi
           fi

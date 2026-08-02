@@ -130,6 +130,9 @@ private:
     [[nodiscard]] std::string handle_timeline_transaction(
         const Request& request,
         bool apply);
+    [[nodiscard]] std::string handle_edit_plan(
+        const Request& request,
+        bool apply);
     [[nodiscard]] std::string handle_timeline_shift(
         const Request& request,
         std::string_view action);

@@ -36,15 +36,11 @@ class PreflightReport:
 
     @property
     def errors(self) -> tuple[PreflightIssue, ...]:
-        return tuple(
-            issue for issue in self.issues if issue.severity == "error"
-        )
+        return tuple(issue for issue in self.issues if issue.severity == "error")
 
     @property
     def warnings(self) -> tuple[PreflightIssue, ...]:
-        return tuple(
-            issue for issue in self.issues if issue.severity == "warning"
-        )
+        return tuple(issue for issue in self.issues if issue.severity == "warning")
 
 
 def _catalog_strings(
@@ -62,9 +58,7 @@ def _catalog_strings(
         entries = page.get("entries")
         next_start = page.get("next_start")
         if not isinstance(entries, list):
-            raise ConnectionError(
-                f"Live Bridge returned an invalid {method} catalog"
-            )
+            raise ConnectionError(f"Live Bridge returned an invalid {method} catalog")
         for entry in entries:
             if method == "font" and isinstance(entry, str):
                 values.add(entry)
@@ -77,9 +71,7 @@ def _catalog_strings(
         if next_start is None:
             return values
         if not isinstance(next_start, int) or isinstance(next_start, bool):
-            raise ConnectionError(
-                f"Live Bridge returned invalid {method} paging"
-            )
+            raise ConnectionError(f"Live Bridge returned invalid {method} paging")
         start = next_start
 
 
@@ -137,7 +129,8 @@ def _timeline_continuity_issues(
 def run_preflight(
     client: LiveClient,
     *,
-    subtitle_layers: tuple[int, ...] = (),
+    subtitle_layers: tuple[int, ...] | None = None,
+    subtitle_overlap: Literal["allow", "warn", "error"] = "allow",
     minimum_subtitle_frames: int = 6,
     audio_range: tuple[int, int] | None = None,
     clipping_threshold: float = 1.0,
@@ -145,6 +138,8 @@ def run_preflight(
     """Inspect the current project without writing files or changing playback."""
     if minimum_subtitle_frames < 1:
         raise ValueError("minimum_subtitle_frames must be positive")
+    if subtitle_overlap not in {"allow", "warn", "error"}:
+        raise ValueError("subtitle_overlap must be allow, warn, or error")
     snapshot = client.get_snapshot(include_alias=False)
     media = client.get_media_inventory()
     if media.revision != snapshot.revision:
@@ -158,11 +153,7 @@ def run_preflight(
                 "error",
                 "MISSING_MEDIA",
                 f"{media.missing_count} referenced media item(s) are missing.",
-                tuple(
-                    item.object_id
-                    for item in media.files
-                    if not item.exists
-                ),
+                tuple(item.object_id for item in media.files if not item.exists),
             )
         )
     if media.unreadable_count:
@@ -194,9 +185,7 @@ def run_preflight(
             raise ConnectionError(
                 "the project changed while preflight inspected layers"
             )
-        locked_layers.update(
-            layer.layer for layer in page.layers if layer.locked
-        )
+        locked_layers.update(layer.layer for layer in page.layers if layer.locked)
         if not page.layers:
             break
         start += len(page.layers)
@@ -209,9 +198,7 @@ def run_preflight(
                 + ", ".join(str(value) for value in sorted(locked_layers)),
             )
         )
-    locked_objects = tuple(
-        obj.object_id for obj in snapshot.objects if obj.api_locked
-    )
+    locked_objects = tuple(obj.object_id for obj in snapshot.objects if obj.api_locked)
     if locked_objects:
         issues.append(
             PreflightIssue(
@@ -236,9 +223,7 @@ def run_preflight(
                 "the project changed while preflight inspected objects"
             )
         locked_effects = tuple(
-            effect.selector
-            for effect in inspection.effects
-            if effect.locked
+            effect.selector for effect in inspection.effects if effect.locked
         )
         if locked_effects:
             issues.append(
@@ -280,9 +265,7 @@ def run_preflight(
                         )
                 if item.type == "text":
                     is_text = True
-        if is_text and (
-            not subtitle_layers or obj.layer in subtitle_layers
-        ):
+        if is_text and subtitle_layers is not None and obj.layer in subtitle_layers:
             if obj.duration_frames < minimum_subtitle_frames:
                 issues.append(
                     PreflightIssue(
@@ -295,23 +278,22 @@ def run_preflight(
                         (obj.object_id,),
                     )
                 )
-            subtitle_ranges.append(
-                (obj.frame_start, obj.frame_end, obj.object_id)
-            )
+            subtitle_ranges.append((obj.frame_start, obj.frame_end, obj.object_id))
     subtitle_ranges.sort()
-    for previous, current in zip(
-        subtitle_ranges,
-        subtitle_ranges[1:],
-    ):
-        if current[0] <= previous[1]:
-            issues.append(
-                PreflightIssue(
-                    "warning",
-                    "SUBTITLE_OVERLAP",
-                    "Subtitle display times overlap.",
-                    (previous[2], current[2]),
+    if subtitle_overlap != "allow":
+        for previous, current in zip(
+            subtitle_ranges,
+            subtitle_ranges[1:],
+        ):
+            if current[0] <= previous[1]:
+                issues.append(
+                    PreflightIssue(
+                        "warning" if subtitle_overlap == "warn" else "error",
+                        "SUBTITLE_OVERLAP",
+                        "Subtitle display times overlap.",
+                        (previous[2], current[2]),
+                    )
                 )
-            )
 
     audio: AudioAnalysis | None = None
     if audio_range is not None:
@@ -321,9 +303,7 @@ def run_preflight(
             frame_end=frame_end,
             expected_revision=snapshot.revision,
         )
-        audio = capture.analyze(
-            clipping_threshold=clipping_threshold
-        )
+        audio = capture.analyze(clipping_threshold=clipping_threshold)
         if audio.non_finite_samples:
             issues.append(
                 PreflightIssue(
@@ -340,10 +320,7 @@ def run_preflight(
                 PreflightIssue(
                     "error",
                     "AUDIO_CLIPPING",
-                    (
-                        f"Audio contains {audio.clipping_samples} "
-                        "clipping sample(s)."
-                    ),
+                    (f"Audio contains {audio.clipping_samples} clipping sample(s)."),
                 )
             )
         if audio.silence_ratio >= 0.999:

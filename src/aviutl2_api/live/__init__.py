@@ -1,5 +1,7 @@
 """Live connection support for the currently open AviUtl2 project."""
 
+from aviutl2_api.editing import AppliedEffect
+
 from .alias import serialize_object_alias
 from .audio import AudioAnalysis, RenderedAudio, analyze_pcm_f32le
 from .catalog import (
@@ -51,6 +53,7 @@ from .media import (
     MediaSplit,
     MediaSplitRange,
 )
+from .project import LiveObject, LiveProject, ObjectSelection
 from .protocol import (
     MAX_PAYLOAD_BYTES,
     PROTOCOL_VERSION,
@@ -81,6 +84,7 @@ __all__ = [
     "MAX_PAYLOAD_BYTES",
     "PROTOCOL_VERSION",
     "AmbiguousInstanceError",
+    "AppliedEffect",
     "AudioAnalysis",
     "BridgeRemoteError",
     "BridgeEvent",
@@ -103,6 +107,8 @@ __all__ = [
     "EditingTransactionResult",
     "ItemInspection",
     "LiveClient",
+    "LiveObject",
+    "LiveProject",
     "LayerInfo",
     "LayerPage",
     "MediaProbe",
@@ -112,6 +118,7 @@ __all__ = [
     "MediaSplit",
     "MediaSplitRange",
     "ObjectInspection",
+    "ObjectSelection",
     "ObjectGroup",
     "ObjectSection",
     "ObjectSections",

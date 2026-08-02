@@ -7,9 +7,20 @@ import struct
 from PIL import Image
 
 from aviutl2_api.live.audio import RenderedAudio
+from aviutl2_api.live.catalog import (
+    CatalogEffect,
+    EffectCatalogPage,
+    EffectFlags,
+)
 from aviutl2_api.live.frame import RenderedFrame, make_contact_sheet
-from aviutl2_api.live.media import CreatedMediaObject
-from aviutl2_api.live.qc import _timeline_continuity_issues
+from aviutl2_api.live.inspection import (
+    EffectInspection,
+    ItemInspection,
+    ObjectInspection,
+)
+from aviutl2_api.live.layers import LayerInfo, LayerPage
+from aviutl2_api.live.media import CreatedMediaObject, MediaInventory
+from aviutl2_api.live.qc import _timeline_continuity_issues, run_preflight
 from aviutl2_api.live.snapshot import ProjectSnapshot, SnapshotObject
 from aviutl2_api.live.subtitles import (
     SubtitleLayerPolicy,
@@ -93,9 +104,7 @@ def test_contact_sheet_is_in_memory_png() -> None:
             sha256="0" * 64,
             png=_png(color),
         )
-        for index, color in enumerate(
-            ((255, 0, 0), (0, 255, 0), (0, 0, 255))
-        )
+        for index, color in enumerate(((255, 0, 0), (0, 255, 0), (0, 0, 255)))
     )
     sheet = make_contact_sheet(
         frames,
@@ -146,9 +155,7 @@ def test_media_creation_returns_sdk_generated_group() -> None:
 
 
 def test_subtitle_assignment_respects_existing_objects() -> None:
-    cue = parse_srt(
-        "1\n00:00:00,000 --> 00:00:01,000\nText\n"
-    )
+    cue = parse_srt("1\n00:00:00,000 --> 00:00:01,000\nText\n")
     occupied = (
         SnapshotObject(
             object_id="obj-1-0",
@@ -198,3 +205,106 @@ def test_timeline_overlap_is_advisory_for_transition_layouts() -> None:
     ]
     assert all(issue.severity == "warning" for issue in issues)
     assert "intentional transition" in issues[0].message
+
+
+def test_general_text_overlap_is_allowed_unless_subtitles_are_explicit() -> None:
+    class TextPreflightClient:
+        def __init__(self) -> None:
+            self.snapshot = ProjectSnapshot(
+                revision=10,
+                scene_id=0,
+                objects=tuple(
+                    SnapshotObject(
+                        f"obj-10-{index}",
+                        10,
+                        index,
+                        0,
+                        29,
+                        f"Text {index}",
+                        None,
+                    )
+                    for index in range(2)
+                ),
+                total=2,
+            )
+
+        def get_snapshot(self, *, include_alias: bool = False) -> ProjectSnapshot:
+            return self.snapshot
+
+        def get_media_inventory(self) -> MediaInventory:
+            return MediaInventory(10, 0, (), 0, 0, 0)
+
+        def get_project_info(self) -> dict[str, int]:
+            return {"layer_max": 1}
+
+        def get_layers(self, *, start: int, count: int) -> LayerPage:
+            layers = tuple(
+                LayerInfo(index, None, True, False, True, 1)
+                for index in range(start, min(2, start + count))
+            )
+            return LayerPage(10, 0, 1, 0, 2, start, layers)
+
+        def get_font_catalog(self, *, start: int, count: int) -> dict[str, object]:
+            return {"entries": [], "next_start": None}
+
+        def get_module_catalog(self, *, start: int, count: int) -> dict[str, object]:
+            return {"entries": [], "next_start": None}
+
+        def get_effect_catalog(self, *, start: int, count: int) -> EffectCatalogPage:
+            effects = (
+                CatalogEffect(
+                    "テキスト",
+                    "input",
+                    1,
+                    EffectFlags(True, False, False, False),
+                    (),
+                ),
+                CatalogEffect(
+                    "標準描画",
+                    "output",
+                    2,
+                    EffectFlags(True, False, False, False),
+                    (),
+                ),
+            )
+            return EffectCatalogPage(0, 2, None, effects)
+
+        def inspect_object(self, obj: SnapshotObject) -> ObjectInspection:
+            return ObjectInspection(
+                obj.object_id,
+                10,
+                0,
+                (
+                    EffectInspection(
+                        0,
+                        0,
+                        "テキスト",
+                        "テキスト#0",
+                        True,
+                        False,
+                        (ItemInspection("テキスト", "text", 1, obj.name, None),),
+                    ),
+                    EffectInspection(
+                        1,
+                        0,
+                        "標準描画",
+                        "標準描画#0",
+                        True,
+                        False,
+                        (),
+                    ),
+                ),
+            )
+
+    client = TextPreflightClient()
+    default_report = run_preflight(client)  # type: ignore[arg-type]
+    explicit_report = run_preflight(  # type: ignore[arg-type]
+        client,
+        subtitle_layers=(0, 1),
+        subtitle_overlap="warn",
+    )
+
+    assert not any("SUBTITLE" in issue.code for issue in default_report.issues)
+    assert [
+        issue.code for issue in explicit_report.issues if "SUBTITLE" in issue.code
+    ] == ["SUBTITLE_OVERLAP"]

@@ -4,7 +4,7 @@
   "result": {
     "edit_state": "edit",
     "pid": 4242,
-    "plugin_version": "0.9.3",
+    "plugin_version": "0.9.5",
     "protocol_version": 1,
     "sdk_baseline": "mirror-2026-07-25"
   }

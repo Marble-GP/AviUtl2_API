@@ -10,6 +10,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from aviutl2_api.editing import EffectDefinition, effect
+from aviutl2_api.effect_profiles import (
+    legacy_compatibility_effect,
+    resolve_effect,
+)
+from aviutl2_api.models import AnimatedValue, StaticValue
+
 
 @dataclass
 class AnimationPreset:
@@ -60,6 +67,21 @@ class EffectPreset:
             name=data["name"],
             properties=data.get("properties", {}),
         )
+
+
+def _effect_preset(spec: EffectDefinition) -> EffectPreset:
+    """Build a complete native preset from the shared compatibility manifest."""
+
+    resolved = resolve_effect(spec)
+    properties: dict[str, Any] = {}
+    for name, value in resolved.items:
+        if isinstance(value, StaticValue):
+            properties[name] = value.value
+        elif isinstance(value, AnimatedValue):
+            properties[name] = value.to_aup2()
+        else:
+            properties[name] = value
+    return EffectPreset(resolved.native_name, properties)
 
 
 @dataclass
@@ -197,9 +219,7 @@ def get_sample_presets() -> list[Preset]:
                 AnimationPreset(
                     property="拡大率", start=100, end=10, motion="直線移動"
                 ),
-                AnimationPreset(
-                    property="透明度", start=0, end=100, motion="直線移動"
-                ),
+                AnimationPreset(property="透明度", start=0, end=100, motion="直線移動"),
             ],
         ),
         Preset(
@@ -207,9 +227,7 @@ def get_sample_presets() -> list[Preset]:
             name="フェードイン",
             description="透明から不透明にフェードイン",
             animations=[
-                AnimationPreset(
-                    property="透明度", start=100, end=0, motion="直線移動"
-                ),
+                AnimationPreset(property="透明度", start=100, end=0, motion="直線移動"),
             ],
         ),
         Preset(
@@ -217,9 +235,7 @@ def get_sample_presets() -> list[Preset]:
             name="フェードアウト",
             description="不透明から透明にフェードアウト",
             animations=[
-                AnimationPreset(
-                    property="透明度", start=0, end=100, motion="直線移動"
-                ),
+                AnimationPreset(property="透明度", start=0, end=100, motion="直線移動"),
             ],
         ),
         Preset(
@@ -271,9 +287,7 @@ def get_sample_presets() -> list[Preset]:
             name="ズームイン",
             description="小さい状態から拡大",
             animations=[
-                AnimationPreset(
-                    property="拡大率", start=0, end=100, motion="補間移動"
-                ),
+                AnimationPreset(property="拡大率", start=0, end=100, motion="補間移動"),
             ],
         ),
         Preset(
@@ -281,9 +295,7 @@ def get_sample_presets() -> list[Preset]:
             name="ズームアウト",
             description="通常サイズから縮小",
             animations=[
-                AnimationPreset(
-                    property="拡大率", start=100, end=0, motion="補間移動"
-                ),
+                AnimationPreset(property="拡大率", start=100, end=0, motion="補間移動"),
             ],
         ),
         Preset(
@@ -305,16 +317,25 @@ def get_sample_presets() -> list[Preset]:
                 # 半径 = sqrt((X2-X1)^2 + (Y2-Y1)^2 + (Z2-Z1)^2)
                 # この設定: 中心(0,100,0)、初期位置(0,200,0)、半径=100
                 AnimationPreset(
-                    property="X", start=0, end=0, motion="回転",
-                    param="4|360|0,1,0.485532,-0.475783,1,0,0.484522,-0.481481"
+                    property="X",
+                    start=0,
+                    end=0,
+                    motion="回転",
+                    param="4|360|0,1,0.485532,-0.475783,1,0,0.484522,-0.481481",
                 ),
                 AnimationPreset(
-                    property="Y", start=100, end=200, motion="回転",
-                    param="4|360|0,1,0.485532,-0.475783,1,0,0.484522,-0.481481"
+                    property="Y",
+                    start=100,
+                    end=200,
+                    motion="回転",
+                    param="4|360|0,1,0.485532,-0.475783,1,0,0.484522,-0.481481",
                 ),
                 AnimationPreset(
-                    property="Z", start=0, end=0, motion="回転",
-                    param="4|360|0,1,0.485532,-0.475783,1,0,0.484522,-0.481481"
+                    property="Z",
+                    start=0,
+                    end=0,
+                    motion="回転",
+                    param="4|360|0,1,0.485532,-0.475783,1,0,0.484522,-0.481481",
                 ),
             ],
         ),
@@ -322,87 +343,40 @@ def get_sample_presets() -> list[Preset]:
             id="shake",
             name="振動",
             description="振動エフェクトを追加",
-            effects=[
-                EffectPreset(
-                    name="振動",
-                    properties={
-                        "X": 10.0,
-                        "Y": 10.0,
-                        "Z": 0.0,
-                        "周期": 1.0,
-                        "ランダム": 1.0,
-                    },
-                ),
-            ],
+            effects=[_effect_preset(legacy_compatibility_effect("shake"))],
         ),
         Preset(
             id="glow-pulse",
             name="グローパルス",
             description="グローエフェクトを追加",
-            effects=[
-                EffectPreset(
-                    name="グロー",
-                    properties={
-                        "強さ": 50.0,
-                        "拡散": 60,
-                        "角度": 25.0,
-                        "しきい値": 50.0,
-                        "比率": 100.0,
-                        "ぼかし": 1,
-                        "形状": "クロス(4本)",
-                        "光色": "",
-                        "光成分のみ": 0,
-                        "サイズ固定": 0,
-                    },
-                ),
-            ],
+            effects=[_effect_preset(effect("glow", strength=50))],
         ),
         Preset(
             id="blur-soft",
             name="ソフトぼかし",
             description="軽いぼかしエフェクト",
-            effects=[
-                EffectPreset(
-                    name="ぼかし",
-                    properties={
-                        "範囲": 5.0,
-                        "縦横比": 0.0,
-                    },
-                ),
-            ],
+            effects=[_effect_preset(effect("blur", radius_px=5))],
         ),
         Preset(
             id="text-shadow",
             name="テキストシャドウ",
             description="テキスト用のドロップシャドウ",
             effects=[
-                EffectPreset(
-                    name="ドロップシャドウ",
-                    properties={
-                        "X": 5,
-                        "Y": 5,
-                        "濃さ": 60.0,
-                        "拡散": 5,
-                        "影色": "000000",
-                        "影を別オブジェクトで描画": 0,
-                    },
-                ),
+                _effect_preset(
+                    effect(
+                        "drop_shadow",
+                        x_px=5,
+                        y_px=5,
+                        opacity=0.6,
+                        diffusion_px=5,
+                    )
+                )
             ],
         ),
         Preset(
             id="border-white",
             name="白縁取り",
             description="白い縁取りを追加",
-            effects=[
-                EffectPreset(
-                    name="縁取り",
-                    properties={
-                        "サイズ": 5,
-                        "ぼかし": 0,
-                        "縁色": "ffffff",
-                        "パターン画像": "",
-                    },
-                ),
-            ],
+            effects=[_effect_preset(effect("outline", size_px=5))],
         ),
     ]

@@ -7,7 +7,7 @@
 namespace aviutl2::live {
 
 inline constexpr std::uint32_t kProtocolVersion = 1;
-inline constexpr std::string_view kPluginVersion = "0.9.3";
+inline constexpr std::string_view kPluginVersion = "0.9.5";
 inline constexpr std::string_view kSdkBaseline = "mirror-2026-07-25";
 inline constexpr std::size_t kMaxPayloadBytes = 1024U * 1024U;
 inline constexpr std::size_t kMaxJsonDepth = 64U;
@@ -20,6 +20,8 @@ inline constexpr std::size_t kMaxClientIdBytes = 128U;
 inline constexpr std::size_t kMaxSnapshotAliasBytes = 384U * 1024U;
 inline constexpr std::size_t kMaxSnapshotObjects = 4096U;
 inline constexpr std::size_t kMaxItemUpdates = 128U;
+inline constexpr std::size_t kMaxCreateEffects = 32U;
+inline constexpr std::size_t kMaxCreateEffectItems = 128U;
 inline constexpr std::size_t kMaxMediaPathCharacters = 32767U;
 inline constexpr std::size_t kMaxInspectEffects = 256U;
 inline constexpr std::size_t kMaxInspectItems = 4096U;

@@ -63,9 +63,14 @@ callback cannot deadlock the main window.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe -m mypy src
-.\.venv\Scripts\python.exe -m ruff check src tests examples
+.\.venv\Scripts\python.exe -m ruff check <changed-python-files...>
+.\.venv\Scripts\python.exe -m mypy --strict <changed-typed-modules...>
 ```
+
+The repository still contains legacy CLI/preview-renderer lint debt outside the
+typed Live Bridge modules. Do not describe a full-repository ruff/mypy run as a
+release gate until that baseline is removed; every changed Python file must
+nevertheless pass the configured checks.
 
 To run the opt-in cross-language named-pipe test:
 
@@ -76,12 +81,37 @@ $env:AVIUTL2_NATIVE_TEST_SERVER = (
 .\.venv\Scripts\python.exe -m pytest tests/integration/test_native_pipe.py -v
 ```
 
+## Security boundary and regression
+
+External access starts disabled for every AviUtl2 process. The Named Pipe rejects
+remote clients and restricts its DACL to Local System and the pipe owner, but after
+the user enables access, any local process running as the same Windows user may
+connect. A session ID provides idempotency, not client authentication.
+
+API/object/layer/effect locks are rechecked with the current revision inside SDK
+edit callbacks. They protect only Live Bridge mutations; they do not prevent GUI
+editing, another plugin, process injection, direct `.aup2` modification, reads of
+Alias/media paths, or an overlay created on another layer.
+
+For an adversarial host regression, lock a disposable object in AviUtl2 and run:
+
+```powershell
+$env:PYTHONPATH = "src"
+python tests/manual/live_bridge_lock_security_probe.py --pid <PID> --delete-probe
+```
+
+The probe covers stale and malformed object IDs, ignored unlock-like fields,
+set/move/delete refusal, placement collision, duplicate JSON keys, invalid UTF-8,
+oversized/deep frames, interrupted connections, and post-test state equality.
+Native tests additionally cover lock marker parsing and dispatch refusal. Never run
+the destructive delete probe against a project that has not been saved separately.
+
 ## AviUtl2 manual integration
 
 1. Install or drag-and-drop the Release `.aux2` into AviUtl2.
 2. Start AviUtl2 and open a project.
-3. Open the `AviUtl2 Live Bridge` panel. Confirm the initial status is Disabled,
-   then check `外部API連携を許可`.
+3. Open `設定 > 外部API連携設定...`. Confirm the independent settings window
+   initially reports Disabled, then check `このウィンドウの外部API連携を許可`.
 4. Confirm `<PID>.json` appears below the per-user instance directory.
 5. Run:
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from .audio import AudioAnalysis, RenderedAudio
 from .client import LiveClient
@@ -54,9 +54,7 @@ class EditingSession:
         if not isinstance(methods, list) or any(
             not isinstance(value, str) for value in methods
         ):
-            raise ConnectionError(
-                "Live Bridge returned an invalid capability manifest"
-            )
+            raise ConnectionError("Live Bridge returned an invalid capability manifest")
         self._methods = frozenset(methods)
         self._operation_ids = itertools.count(1)
         self._snapshot: ProjectSnapshot | None = None
@@ -69,29 +67,26 @@ class EditingSession:
     def ready_for_1_0(self) -> bool:
         release_gate = self.capabilities.get("release_gate")
         return (
-            isinstance(release_gate, dict)
-            and release_gate.get("ready_for_1_0") is True
+            isinstance(release_gate, dict) and release_gate.get("ready_for_1_0") is True
         )
 
     def require(self, *methods: str) -> None:
         missing = [method for method in methods if method not in self._methods]
         if missing:
             raise CapabilityUnavailableError(
-                "running AviUtl2/SDK does not expose: "
-                + ", ".join(missing)
+                "running AviUtl2/SDK does not expose: " + ", ".join(missing)
             )
 
     def refresh(self, *, include_alias: bool = False) -> ProjectSnapshot:
         self.require("project.get_snapshot")
-        self._snapshot = self.client.get_snapshot(
-            include_alias=include_alias
-        )
+        self._snapshot = self.client.get_snapshot(include_alias=include_alias)
         return self._snapshot
 
     def preflight(
         self,
         *,
-        subtitle_layers: tuple[int, ...] = (),
+        subtitle_layers: tuple[int, ...] | None = None,
+        subtitle_overlap: Literal["allow", "warn", "error"] = "allow",
         minimum_subtitle_frames: int = 6,
         audio_range: tuple[int, int] | None = None,
         clipping_threshold: float = 1.0,
@@ -114,6 +109,7 @@ class EditingSession:
         report = run_preflight(
             self.client,
             subtitle_layers=subtitle_layers,
+            subtitle_overlap=subtitle_overlap,
             minimum_subtitle_frames=minimum_subtitle_frames,
             audio_range=audio_range,
             clipping_threshold=clipping_threshold,
@@ -134,15 +130,9 @@ class EditingSession:
             "project.get_snapshot",
         )
         current = self._snapshot or self.refresh()
-        revision = (
-            current.revision
-            if expected_revision is None
-            else expected_revision
-        )
+        revision = current.revision if expected_revision is None else expected_revision
         if current.revision != revision:
-            raise ValueError(
-                "expected_revision does not match the session snapshot"
-            )
+            raise ValueError("expected_revision does not match the session snapshot")
         if validate_first:
             validation = self.client.validate_transaction(
                 expected_revision=revision,
@@ -150,27 +140,21 @@ class EditingSession:
             )
             if not validation.valid:
                 raise ConnectionError("transaction validation was not valid")
-        operation_id = (
-            f"editing-session-{next(self._operation_ids):016d}"
-        )
+        operation_id = f"editing-session-{next(self._operation_ids):016d}"
         receipt = self.client.apply_transaction(
             expected_revision=revision,
             commands=commands,
             operation_id=operation_id,
         )
         fresh = self.client.get_snapshot(include_alias=False)
-        if (
-            receipt.revision is not None
-            and fresh.revision != receipt.revision
-        ):
+        if receipt.revision is not None and fresh.revision != receipt.revision:
             raise ConnectionError(
                 "fresh snapshot does not match the transaction receipt"
             )
         self._snapshot = fresh
         history = self.capabilities.get("history")
         history_executable = (
-            isinstance(history, dict)
-            and history.get("bridge_owned_undo") is True
+            isinstance(history, dict) and history.get("bridge_owned_undo") is True
         )
         return EditingTransactionResult(
             receipt=receipt,

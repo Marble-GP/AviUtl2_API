@@ -18,7 +18,7 @@ from aviutl2_api.models import (
 class Aup2ParseError(Exception):
     """Error during .aup2 parsing."""
 
-    def __init__(self, message: str, line_number: int | None = None):
+    def __init__(self, message: str, line_number: int | None = None) -> None:
         self.line_number = line_number
         if line_number:
             message = f"Line {line_number}: {message}"
@@ -32,7 +32,7 @@ class Aup2Parser:
     SECTION_PATTERN = re.compile(r"^\[(.+)\]$")
     KEY_VALUE_PATTERN = re.compile(r"^([^=]+)=(.*)$")
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._line_number = 0
         self._current_section: str | None = None
         self._sections: dict[str, dict[str, str]] = {}
@@ -101,7 +101,7 @@ class Aup2Parser:
         if "project" in self._sections:
             proj_data = self._sections["project"]
             project.version = int(proj_data.get("version", "2001901"))
-            # Support both "ファイル" (correct Japanese) and "file" (old format)
+            # Both spellings are observed across generated and host-saved files.
             project.file_path = proj_data.get("ファイル", proj_data.get("file", ""))
             project.display_scene = int(proj_data.get("display.scene", "0"))
 

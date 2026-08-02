@@ -19,7 +19,28 @@ Example usage:
     json_str = to_json(project)
 """
 
-__version__ = "0.9.3"
+__version__ = "0.9.5"
+
+from aviutl2_api.aup2_effects import (
+    Aup2RoundTripReport,
+    StandardEffectValidation,
+    apply_effects,
+    compare_aup2_roundtrip,
+    validate_standard_effects,
+)
+from aviutl2_api.effect_profiles import (
+    AUP2_EFFECT_COMPATIBLE_PROJECT_VERSIONS,
+    AUP2_EFFECT_MANIFEST_VERSION,
+    EffectProfileUnavailableError,
+    available_effect_profiles,
+)
+from aviutl2_api.json_converter import (
+    JsonConverter,
+    from_dict,
+    from_json,
+    to_dict,
+    to_json,
+)
 
 # Models
 from aviutl2_api.models import (
@@ -48,18 +69,18 @@ from aviutl2_api.serializer import (
     serialize_to_file,
 )
 
-# JSON Converter
-from aviutl2_api.json_converter import (
-    JsonConverter,
-    from_dict,
-    from_json,
-    to_dict,
-    to_json,
-)
-
 __all__ = [
     # Version
     "__version__",
+    "AUP2_EFFECT_COMPATIBLE_PROJECT_VERSIONS",
+    "AUP2_EFFECT_MANIFEST_VERSION",
+    "Aup2RoundTripReport",
+    "EffectProfileUnavailableError",
+    "StandardEffectValidation",
+    "apply_effects",
+    "available_effect_profiles",
+    "compare_aup2_roundtrip",
+    "validate_standard_effects",
     # Models
     "Project",
     "Scene",

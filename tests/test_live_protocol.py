@@ -238,6 +238,36 @@ def test_live_client_sends_typed_batch_command() -> None:
     assert request["params"]["commands"] == [command.to_wire()]
 
 
+def test_live_client_sends_unified_edit_plan_and_operation_id() -> None:
+    command = {
+        "op": "object.delete",
+        "key": "remove-old-title",
+        "target": {"object_id": "obj-123-4"},
+    }
+    response = (
+        b'{"id":"py-00000001","ok":true,"result":'
+        b'{"applied_count":1,"undo_grouped":true,"atomic":false}}'
+    )
+    stream = ScriptedStream(encode_frame(response), write_chunk=4096)
+    client = LiveClient(FramedTransport(stream))
+
+    result = client.apply_edit_plan(
+        expected_revision=123,
+        commands=[command],
+        operation_id="agent-edit-42",
+    )
+
+    assert result["applied_count"] == 1
+    payload_size = struct.unpack("<I", stream.written[:4])[0]
+    request = json.loads(stream.written[4 : 4 + payload_size])
+    assert request["method"] == "edit.plan.apply"
+    assert request["params"] == {
+        "expected_revision": 123,
+        "commands": [command],
+        "operation_id": "agent-edit-42",
+    }
+
+
 def test_add_text_uses_apply_batch() -> None:
     response = (
         b'{"id":"py-00000001","ok":true,"result":'

@@ -31,6 +31,9 @@ using aviutl2::live::CatalogEffect;
 using aviutl2::live::CatalogItem;
 using aviutl2::live::CreateAliasCommand;
 using aviutl2::live::EditState;
+using aviutl2::live::EditPlanCommand;
+using aviutl2::live::EditPlanEffectScope;
+using aviutl2::live::EditPlanResult;
 using aviutl2::live::EffectCatalogResult;
 using aviutl2::live::EffectInitialItem;
 using aviutl2::live::Json;
@@ -307,6 +310,19 @@ public:
         return result;
     }
 
+    [[nodiscard]] EditPlanResult run_edit_plan(
+        const std::int64_t expected_revision,
+        const std::vector<EditPlanCommand>& commands,
+        const bool apply) noexcept override {
+        last_revision = expected_revision;
+        last_plan_commands = commands;
+        last_plan_apply = apply;
+        ++plan_calls;
+        EditPlanResult result = plan_result;
+        result.applied_count = apply ? commands.size() : 0U;
+        return result;
+    }
+
     [[nodiscard]] MediaProbeResult probe_media(
         const std::wstring& file) noexcept override {
         last_file = file;
@@ -528,6 +544,7 @@ public:
         true,
         124,
     };
+    EditPlanResult plan_result{true, true, 124, 2U};
     MediaProbeResult media_probe_result{
         true,
         MediaInfo{true, true, true, 1, 0, 2.5, 1280, 720},
@@ -602,6 +619,7 @@ public:
     ModuleCatalogResult module_catalog_result{true};
     std::vector<CreateAliasCommand> last_commands;
     std::vector<ObjectItemUpdate> last_updates;
+    std::vector<EditPlanCommand> last_plan_commands;
     std::int64_t last_revision = 0;
     std::size_t last_object_index = 0U;
     std::size_t last_page_start = 0U;
@@ -628,6 +646,8 @@ public:
     int inspect_calls = 0;
     int render_calls = 0;
     int audio_render_calls = 0;
+    int plan_calls = 0;
+    bool last_plan_apply = false;
 };
 
 struct HostObjectFixture final {
@@ -843,6 +863,25 @@ void test_protocol_and_fixtures() {
     require(
         json_equal(dispatcher.handle_payload(hello_request), hello_response),
         "hello fixture response should match");
+
+    const Json capabilities = aviutl2::live::parse_json(
+        dispatcher.handle_payload(
+            R"({"id":"caps","protocol_version":1,"method":"system.get_capabilities","params":{}})"));
+    const Json* capability_result = capabilities.find("result");
+    require(
+        capability_result->find("semantic_effect_profiles")->as_bool() &&
+            capability_result->find("native_effect_fallback")->as_bool() &&
+            capability_result
+                    ->find("edit_plan_create_effect_stack")
+                    ->as_bool() &&
+            capability_result
+                    ->find("media_group_effect_routing")
+                    ->as_bool() &&
+            capability_result->find("linear_effect_values")->as_bool() &&
+            capability_result
+                    ->find("aup2_effect_manifest_version")
+                    ->as_integer() == 2001901,
+        "0.9.5 semantic Effect capabilities should be explicit");
 
     const std::string batch_validate_request =
         read_file(fixture_dir / "batch_validate.request.json");
@@ -1185,6 +1224,80 @@ void test_protocol_and_fixtures() {
                 "INVALID_ARGUMENT" &&
             sdk.apply_calls == 2,
         "invalid command should be rejected before SdkAdapter");
+
+    const std::string plan_request =
+        std::string(
+            R"({"id":"plan","protocol_version":1,"method":"edit.plan.apply","params":{"expected_revision":123,"commands":[{"op":"object.create_from_alias","key":"title","layer":4,"frame":100,"length":10,"alias":")") +
+        alias +
+        R"(","effects":[{"effect":"グロー","profile":"glow","scope":"video","enabled":false,"items":[{"effect":"グロー","item":"強さ","value":"50.00"}]}]},{"op":"object.update","key":"existing","target":{"object_id":"obj-123-0"},"items":[{"effect":"標準描画","item":"X","value":"120.000000"}]}]}})";
+    const Json plan_json = aviutl2::live::parse_json(
+        dispatcher.handle_payload(88U, plan_request));
+    require(
+        plan_json.find("result")->find("applied_count")->as_integer() == 2 &&
+            plan_json.find("result")->find("undo_grouped")->as_bool() &&
+            sdk.plan_calls == 1 && sdk.last_plan_apply &&
+            sdk.last_plan_commands.size() == 2U &&
+            sdk.last_plan_commands[0].effects.size() == 1U &&
+            sdk.last_plan_commands[0].effects[0].effect == L"グロー" &&
+            sdk.last_plan_commands[0].effects[0].profile == "glow" &&
+            sdk.last_plan_commands[0].effects[0].scope ==
+                EditPlanEffectScope::video &&
+            !sdk.last_plan_commands[0].effects[0].enabled &&
+            sdk.last_plan_commands[0].effects[0].items.size() == 1U &&
+            sdk.last_plan_commands[0].effects[0].items[0].item == L"強さ" &&
+            sdk.last_plan_commands[1].updates.size() == 1U,
+        "mixed effect plan should preserve its ordered initial Effect data");
+
+    const Json plan_validate = aviutl2::live::parse_json(
+        dispatcher.handle_payload(
+            std::string(
+                R"({"id":"plan-validate","protocol_version":1,"method":"edit.plan.validate","params":{"expected_revision":123,"commands":[{"op":"object.create_from_alias","key":"title","layer":4,"frame":100,"length":10,"alias":")") +
+            alias + R"("}]}})"));
+    require(
+        plan_validate.find("result")->find("valid")->as_bool() &&
+            sdk.plan_calls == 2 && !sdk.last_plan_apply,
+        "edit plan validation should not request an applying SDK section");
+
+    std::string excessive_effects =
+        R"({"id":"too-many-effects","protocol_version":1,"method":"edit.plan.validate","params":{"expected_revision":123,"commands":[{"op":"object.create_from_alias","key":"title","layer":4,"frame":100,"length":10,"alias":")" +
+        alias + R"(","effects":[)";
+    for (int index = 0; index < 33; ++index) {
+        if (index != 0) {
+            excessive_effects += ',';
+        }
+        excessive_effects +=
+            R"({"effect":"Glow","scope":"video","enabled":true,"items":[]})";
+    }
+    excessive_effects += R"(]}]}})";
+    const Json excessive_effects_result = aviutl2::live::parse_json(
+        dispatcher.handle_payload(excessive_effects));
+    require(
+        excessive_effects_result.find("error")
+                    ->find("code")
+                    ->as_string() == "INVALID_ARGUMENT" &&
+            sdk.plan_calls == 2,
+        "create-time Effect count should be bounded before the SDK call");
+
+    sdk.plan_result = EditPlanResult{};
+    sdk.plan_result.failed_command_index = 1U;
+    sdk.plan_result.rollback_attempted = true;
+    sdk.plan_result.rollback_complete = false;
+    sdk.plan_result.restored_count = 1U;
+    sdk.plan_result.gui_undo_required = true;
+    sdk.plan_result.error_code = "PLAN_APPLY_FAILED";
+    sdk.plan_result.error_message = "planned failure";
+    const Json plan_failure = aviutl2::live::parse_json(
+        dispatcher.handle_payload(88U, plan_request));
+    const Json* plan_error = plan_failure.find("error");
+    const Json* rollback = plan_error->find("details")->find("rollback");
+    require(
+        plan_error->find("code")->as_string() == "PLAN_APPLY_FAILED" &&
+            rollback->find("attempted")->as_bool() &&
+            !rollback->find("complete")->as_bool() &&
+            rollback->find("restored_count")->as_integer() == 1 &&
+            rollback->find("gui_undo_required")->as_bool(),
+        "edit plan failure should expose explicit rollback status");
+    sdk.plan_result = EditPlanResult{true, true, 124, 2U};
 
     sdk.validate_result = BatchEditResult{};
     sdk.validate_result.error_code = "PLACEMENT_COLLISION";

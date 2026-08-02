@@ -69,6 +69,7 @@ from .transport import FramedTransport, connect_named_pipe
 _MUTATION_METHODS = frozenset(
     {
         "batch.apply",
+        "edit.plan.apply",
         "layer.update",
         "media.relink",
         "media.trim",
@@ -178,9 +179,7 @@ class LiveClient:
                 )
             request_params["operation_id"] = operation_id
         elif self._session is not None and method in _MUTATION_METHODS:
-            request_params["operation_id"] = (
-                f"py-op-{next(self._operation_ids):016d}"
-            )
+            request_params["operation_id"] = f"py-op-{next(self._operation_ids):016d}"
         request_id = f"py-{next(self._request_ids):08d}"
         request = encode_request(request_id, method, request_params)
         response_payload = self._transport.exchange(
@@ -276,14 +275,52 @@ class LiveClient:
     ) -> dict[str, Any]:
         return self.call("project.get_info", timeout=timeout)
 
+    def validate_edit_plan(
+        self,
+        *,
+        expected_revision: int,
+        commands: Sequence[Mapping[str, Any]],
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Validate an explicit mixed edit plan without changing AviUtl2."""
+        if expected_revision <= 0 or not commands:
+            raise ValueError("a current revision and commands are required")
+        return self.call(
+            "edit.plan.validate",
+            {
+                "expected_revision": expected_revision,
+                "commands": [dict(command) for command in commands],
+            },
+            timeout=timeout,
+        )
+
+    def apply_edit_plan(
+        self,
+        *,
+        expected_revision: int,
+        commands: Sequence[Mapping[str, Any]],
+        operation_id: str | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Apply a preflighted mixed edit plan in one host edit section."""
+        if expected_revision <= 0 or not commands:
+            raise ValueError("a current revision and commands are required")
+        return self.call(
+            "edit.plan.apply",
+            {
+                "expected_revision": expected_revision,
+                "commands": [dict(command) for command in commands],
+            },
+            operation_id=operation_id,
+            timeout=timeout,
+        )
+
     def get_current_scene(
         self,
         *,
         timeout: float | None = None,
     ) -> SceneInfo:
-        return SceneInfo.from_wire(
-            self.call("scene.get_current", timeout=timeout)
-        )
+        return SceneInfo.from_wire(self.call("scene.get_current", timeout=timeout))
 
     def update_current_scene(
         self,
@@ -469,15 +506,14 @@ class LiveClient:
             frame_start,
             frame_end,
         )
-        if any(
-            value is not None
-            and (
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or value < 0
+        if (
+            any(
+                value is not None
+                and (not isinstance(value, int) or isinstance(value, bool) or value < 0)
+                for value in integer_values
             )
-            for value in integer_values
-        ) or count == 0:
+            or count == 0
+        ):
             raise ValueError("snapshot ranges must be non-negative and count positive")
         params: dict[str, Any] = {
             "offset": offset,
@@ -526,9 +562,7 @@ class LiveClient:
         timeout: float | None = _MEDIA_INVENTORY_TIMEOUT,
     ) -> MediaInventory:
         """Inspect every file item with a long default timeout for large projects."""
-        return MediaInventory.from_wire(
-            self.call("media.inventory", timeout=timeout)
-        )
+        return MediaInventory.from_wire(self.call("media.inventory", timeout=timeout))
 
     def relink_media(
         self,
@@ -711,9 +745,7 @@ class LiveClient:
             or len(digest) != 64
             or native_renderer is not True
         ):
-            raise ConnectionError(
-                "Live Bridge returned invalid frame render metadata"
-            )
+            raise ConnectionError("Live Bridge returned invalid frame render metadata")
         assert isinstance(byte_size, int)
         assert isinstance(chunk_count, int)
         assert isinstance(width, int)
@@ -730,9 +762,7 @@ class LiveClient:
             or height <= 0
             or revision <= 0
         ):
-            raise ConnectionError(
-                "Live Bridge returned invalid frame render metadata"
-            )
+            raise ConnectionError("Live Bridge returned invalid frame render metadata")
 
         chunks: list[bytes] = []
         received = 0
@@ -769,9 +799,7 @@ class LiveClient:
                         "Live Bridge returned invalid frame chunk base64"
                     ) from error
                 if len(decoded) != data_size:
-                    raise ConnectionError(
-                        "Live Bridge frame chunk size does not match"
-                    )
+                    raise ConnectionError("Live Bridge frame chunk size does not match")
                 chunks.append(decoded)
                 received += len(decoded)
         finally:
@@ -816,32 +844,20 @@ class LiveClient:
             not selected
             or len(selected) > 64
             or any(
-                not isinstance(frame, int)
-                or isinstance(frame, bool)
-                or frame < 0
+                not isinstance(frame, int) or isinstance(frame, bool) or frame < 0
                 for frame in selected
             )
         ):
-            raise ValueError(
-                "frames must contain 1..64 unique non-negative integers"
-            )
+            raise ValueError("frames must contain 1..64 unique non-negative integers")
         rendered = tuple(
-            self.render_frame(frame, timeout=timeout_per_frame)
-            for frame in selected
+            self.render_frame(frame, timeout=timeout_per_frame) for frame in selected
         )
         revisions = {frame.revision for frame in rendered}
         if len(revisions) != 1:
-            raise ConnectionError(
-                "the project changed during multi-frame rendering"
-            )
+            raise ConnectionError("the project changed during multi-frame rendering")
         revision = rendered[0].revision
-        if (
-            expected_revision is not None
-            and revision != expected_revision
-        ):
-            raise ConnectionError(
-                "rendered frames do not match expected_revision"
-            )
+        if expected_revision is not None and revision != expected_revision:
+            raise ConnectionError("rendered frames do not match expected_revision")
         return rendered
 
     def render_review_contact_sheet(
@@ -858,9 +874,7 @@ class LiveClient:
         timeout_per_frame: float = 30.0,
     ) -> ContactSheet:
         """Auto-sample edit boundaries and build an in-memory contact sheet."""
-        current = snapshot or self.get_snapshot(
-            include_alias=False
-        )
+        current = snapshot or self.get_snapshot(include_alias=False)
         frames = review_sample_frames(
             current,
             boundary_padding=boundary_padding,
@@ -928,9 +942,7 @@ class LiveClient:
             or metadata.get("channels") != 2
             or metadata.get("native_renderer") is not True
         ):
-            raise ConnectionError(
-                "Live Bridge returned invalid audio render metadata"
-            )
+            raise ConnectionError("Live Bridge returned invalid audio render metadata")
         (
             byte_size,
             chunk_count,
@@ -994,9 +1006,7 @@ class LiveClient:
                         "Live Bridge returned invalid audio chunk base64"
                     ) from error
                 if len(decoded) != data_size:
-                    raise ConnectionError(
-                        "Live Bridge audio chunk size does not match"
-                    )
+                    raise ConnectionError("Live Bridge audio chunk size does not match")
                 chunks.append(decoded)
                 received += len(decoded)
         finally:
@@ -1006,10 +1016,7 @@ class LiveClient:
                 timeout=timeout,
             )
         pcm = b"".join(chunks)
-        if (
-            len(pcm) != byte_size
-            or hashlib.sha256(pcm).hexdigest() != digest
-        ):
+        if len(pcm) != byte_size or hashlib.sha256(pcm).hexdigest() != digest:
             raise ConnectionError(
                 "Live Bridge rendered PCM failed integrity validation"
             )
@@ -1036,13 +1043,9 @@ class LiveClient:
         timeout: float | None,
     ) -> ItemInspection:
         inspection = self.inspect_object(obj, timeout=timeout)
-        effects = [
-            value for value in inspection.effects if value.selector == effect
-        ]
+        effects = [value for value in inspection.effects if value.selector == effect]
         if len(effects) != 1:
-            raise ValueError(
-                f"effect selector {effect!r} did not identify one effect"
-            )
+            raise ValueError(f"effect selector {effect!r} did not identify one effect")
         items = [value for value in effects[0].items if value.name == item]
         if len(items) != 1:
             raise ValueError(f"item {item!r} did not identify one setting")
@@ -1078,12 +1081,9 @@ class LiveClient:
                 raise TypeError("color items require a hexadecimal string")
             color = value.removeprefix("#")
             if len(color) not in {6, 8} or any(
-                character.lower() not in "0123456789abcdef"
-                for character in color
+                character.lower() not in "0123456789abcdef" for character in color
             ):
-                raise ValueError(
-                    "color items require six or eight hexadecimal digits"
-                )
+                raise ValueError("color items require six or eight hexadecimal digits")
 
     def set_property(
         self,
@@ -1212,8 +1212,7 @@ class LiveClient:
         ]
         if len(candidates) != 1:
             raise ValueError(
-                "playback rate must identify exactly one video or audio "
-                "media effect"
+                "playback rate must identify exactly one video or audio media effect"
             )
         effect_selector, inspected_item = candidates[0]
         raw_percent = float(rate) * 100.0
@@ -1327,10 +1326,7 @@ class LiveClient:
     ) -> TransactionReceipt:
         return self.apply_transaction(
             expected_revision=group.revision,
-            commands=[
-                TimelineTransactionCommand.delete(obj)
-                for obj in group.objects
-            ],
+            commands=[TimelineTransactionCommand.delete(obj) for obj in group.objects],
             timeout=timeout,
         )
 
@@ -1526,9 +1522,7 @@ class LiveClient:
         animated playback position/speed or multiple sections are refused.
         """
         if obj.api_locked:
-            raise PermissionError(
-                "an API-locked object cannot be split externally"
-            )
+            raise PermissionError("an API-locked object cannot be split externally")
         if frame <= obj.frame_start or frame > obj.frame_end:
             raise ValueError("frame must be strictly inside the object")
         params = obj.target_params()
@@ -1689,17 +1683,11 @@ class LiveClient:
                     selected_style.text_for(placement.cue),
                     layer=placement.layer,
                     frame=placement.frame_start,
-                    length=(
-                        placement.frame_end
-                        - placement.frame_start
-                        + 1
-                    ),
+                    length=(placement.frame_end - placement.frame_start + 1),
                     x=selected_style.x,
                     y=selected_style.y,
                     size=selected_style.size,
-                    color=selected_style.color_for(
-                        placement.cue
-                    ),
+                    color=selected_style.color_for(placement.cue),
                 ),
                 client_id=placement.client_id,
             )
@@ -1770,9 +1758,7 @@ class LiveClient:
             if not items:
                 raise ValueError("items must not be empty")
             if any(
-                not isinstance(name, str)
-                or not name
-                or not isinstance(value, str)
+                not isinstance(name, str) or not name or not isinstance(value, str)
                 for name, value in items.items()
             ):
                 raise TypeError("items must map non-empty names to raw strings")
@@ -1820,12 +1806,7 @@ class LiveClient:
         timeout: float | None = None,
     ) -> dict[str, Any]:
         """Delete an effect using the selector returned by inspect_object()."""
-        if (
-            not selector
-            or "\r" in selector
-            or "\n" in selector
-            or "\x00" in selector
-        ):
+        if not selector or "\r" in selector or "\n" in selector or "\x00" in selector:
             raise ValueError("selector must be a non-empty single-line name")
         params = obj.target_params()
         params["selector"] = selector

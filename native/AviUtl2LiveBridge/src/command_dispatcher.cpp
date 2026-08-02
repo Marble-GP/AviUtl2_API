@@ -621,6 +621,7 @@ bool CommandDispatcher::is_mutation_method(
     const std::string_view method) noexcept {
     static constexpr std::string_view methods[]{
         "batch.apply",
+        "edit.plan.apply",
         "layer.update",
         "media.relink",
         "media.trim",
@@ -1160,6 +1161,12 @@ std::string CommandDispatcher::dispatch(const Request& request) {
         if (request.method == "timeline.transaction.apply") {
             return handle_timeline_transaction(request, true);
         }
+        if (request.method == "edit.plan.validate") {
+            return handle_edit_plan(request, false);
+        }
+        if (request.method == "edit.plan.apply") {
+            return handle_edit_plan(request, true);
+        }
         if (request.method == "timeline.shift_after") {
             return handle_timeline_shift(request, "shift_after");
         }
@@ -1249,6 +1256,8 @@ Json CommandDispatcher::capabilities_result() const {
         Json("scene.get_current"),
         Json("scene.update_current"),
         Json("effect.catalog"),
+        Json("edit.plan.apply"),
+        Json("edit.plan.validate"),
         Json("font.catalog"),
         Json("palette.catalog"),
         Json("module.catalog"),
@@ -1294,6 +1303,12 @@ Json CommandDispatcher::capabilities_result() const {
         Json("batch.apply"),
     };
     Json::Object result{
+        {"semantic_effect_profiles", Json(true)},
+        {"native_effect_fallback", Json(true)},
+        {"edit_plan_create_effect_stack", Json(true)},
+        {"media_group_effect_routing", Json(true)},
+        {"linear_effect_values", Json(true)},
+        {"aup2_effect_manifest_version", Json(2001901)},
         {"sessions",
          Json(Json::Object{
              {"idempotent_mutations", Json(true)},
@@ -1348,6 +1363,30 @@ Json CommandDispatcher::capabilities_result() const {
              {"atomic", Json(false)},
              {"max_commands",
               Json(static_cast<std::int64_t>(kMaxBatchCommands))},
+             {"single_undo_unit", Json(true)},
+         })},
+        {"edit_plan",
+         Json(Json::Object{
+             {"atomic", Json(false)},
+             {"automatic_placement", Json(false)},
+             {"max_commands",
+              Json(static_cast<std::int64_t>(kMaxBatchCommands))},
+             {"max_create_effects",
+              Json(static_cast<std::int64_t>(kMaxCreateEffects))},
+             {"max_create_effect_items",
+              Json(static_cast<std::int64_t>(kMaxCreateEffectItems))},
+             {"operations",
+              Json(Json::Array{
+                  Json("object.create_from_alias"),
+                  Json("object.create_from_media_file"),
+                  Json("object.update"),
+                  Json("object.move"),
+                  Json("object.delete"),
+                  Json("object.effect.add"),
+                  Json("object.effect.set_enabled"),
+              })},
+             {"rollback", Json("best_effort_with_receipt")},
+             {"single_revision", Json(true)},
              {"single_undo_unit", Json(true)},
          })},
         {"max_alias_bytes",
@@ -4454,6 +4493,393 @@ std::string CommandDispatcher::handle_timeline_transaction(
             parsed_commands,
             apply),
         apply);
+}
+
+std::string CommandDispatcher::handle_edit_plan(
+    const Request& request,
+    const bool apply) {
+    const Json* expected =
+        find_field(request.params, "expected_revision");
+    const Json* commands = find_field(request.params, "commands");
+    if (expected == nullptr || !expected->is_integer() ||
+        expected->as_integer() <= 0 || commands == nullptr ||
+        !commands->is_array() || commands->as_array().empty() ||
+        commands->as_array().size() > kMaxBatchCommands) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "expected_revision and 1..128 edit-plan commands are required.");
+    }
+
+    const auto parse_updates = [&](
+        const Json::Object& source,
+        std::vector<ObjectItemUpdate>& output,
+        const bool allow_empty) -> std::string {
+        const Json* items = find_field(source, "items");
+        if (items == nullptr) {
+            return allow_empty ? std::string() :
+                std::string("items is required.");
+        }
+        if (!items->is_array() ||
+            items->as_array().size() > kMaxItemUpdates ||
+            (!allow_empty && items->as_array().empty())) {
+            return "items must contain at most 128 valid item updates.";
+        }
+        std::set<std::string, std::less<>> unique;
+        for (const Json& item_value : items->as_array()) {
+            if (!item_value.is_object()) {
+                return "Every item update must be an object.";
+            }
+            const Json* effect =
+                find_field(item_value.as_object(), "effect");
+            const Json* item =
+                find_field(item_value.as_object(), "item");
+            const Json* value =
+                find_field(item_value.as_object(), "value");
+            if (effect == nullptr || !effect->is_string() ||
+                item == nullptr || !item->is_string() ||
+                value == nullptr || !value->is_string() ||
+                !valid_item_name(effect->as_string()) ||
+                !valid_item_name(item->as_string()) ||
+                value->as_string().size() > kMaxAliasBytes ||
+                value->as_string().find('\0') != std::string::npos) {
+                return "An edit-plan item update is invalid.";
+            }
+            const std::string key =
+                effect->as_string() + '\0' + item->as_string();
+            if (!unique.insert(key).second) {
+                return "An edit-plan item update is duplicated.";
+            }
+            output.push_back(ObjectItemUpdate{
+                utf8_to_wide(effect->as_string()),
+                utf8_to_wide(item->as_string()),
+                value->as_string(),
+            });
+        }
+        return {};
+    };
+
+    const auto parse_effects = [&parse_updates](
+        const Json::Object& source,
+        std::vector<EditPlanEffect>& output) -> std::string {
+        const Json* effects = find_field(source, "effects");
+        if (effects == nullptr) {
+            return {};
+        }
+        if (!effects->is_array() ||
+            effects->as_array().size() > kMaxCreateEffects) {
+            return "effects must contain at most 32 effect definitions.";
+        }
+        for (const Json& effect_value : effects->as_array()) {
+            if (!effect_value.is_object()) {
+                return "Every create-time effect must be an object.";
+            }
+            const Json::Object& source_effect = effect_value.as_object();
+            const Json* effect = find_field(source_effect, "effect");
+            const Json* enabled = find_field(source_effect, "enabled");
+            const Json* scope = find_field(source_effect, "scope");
+            const Json* profile = find_field(source_effect, "profile");
+            if (effect == nullptr || !effect->is_string() ||
+                !valid_item_name(effect->as_string()) ||
+                enabled == nullptr || !enabled->is_bool() ||
+                scope == nullptr || !scope->is_string() ||
+                (profile != nullptr && !profile->is_null() &&
+                 (!profile->is_string() ||
+                  profile->as_string().size() > kMaxClientIdBytes))) {
+                return "A create-time effect definition is invalid.";
+            }
+            EditPlanEffect parsed_effect;
+            parsed_effect.effect = utf8_to_wide(effect->as_string());
+            parsed_effect.enabled = enabled->as_bool();
+            if (profile != nullptr && profile->is_string()) {
+                parsed_effect.profile = profile->as_string();
+            }
+            if (scope->as_string() == "primary") {
+                parsed_effect.scope = EditPlanEffectScope::primary;
+            } else if (scope->as_string() == "video") {
+                parsed_effect.scope = EditPlanEffectScope::video;
+            } else if (scope->as_string() == "audio") {
+                parsed_effect.scope = EditPlanEffectScope::audio;
+            } else {
+                return "A create-time effect scope is invalid.";
+            }
+            std::vector<ObjectItemUpdate> updates;
+            const std::string update_error =
+                parse_updates(source_effect, updates, true);
+            if (!update_error.empty()) {
+                return update_error;
+            }
+            if (updates.size() > kMaxCreateEffectItems) {
+                return "A create-time effect has too many items.";
+            }
+            for (ObjectItemUpdate& update : updates) {
+                if (update.effect != parsed_effect.effect) {
+                    return "Create-time items must use their effect name.";
+                }
+                parsed_effect.items.push_back(EffectInitialItem{
+                    std::move(update.item),
+                    std::move(update.value),
+                });
+            }
+            output.push_back(std::move(parsed_effect));
+        }
+        return {};
+    };
+
+    std::vector<EditPlanCommand> parsed;
+    parsed.reserve(commands->as_array().size());
+    std::set<std::string, std::less<>> keys;
+    for (std::size_t index = 0U;
+         index < commands->as_array().size();
+         ++index) {
+        const Json& command_value = commands->as_array()[index];
+        const auto invalid = [&](const std::string_view message) {
+            return make_error_response(
+                request.id,
+                "INVALID_ARGUMENT",
+                message,
+                Json::Object{
+                    {"failed_command_index",
+                     Json(static_cast<std::int64_t>(index))},
+                });
+        };
+        if (!command_value.is_object()) {
+            return invalid("Every edit-plan command must be an object.");
+        }
+        const Json::Object& command = command_value.as_object();
+        const Json* op = find_field(command, "op");
+        const Json* key = find_field(command, "key");
+        if (op == nullptr || !op->is_string() || key == nullptr ||
+            !key->is_string() || key->as_string().empty() ||
+            key->as_string().size() > kMaxClientIdBytes ||
+            !keys.insert(key->as_string()).second) {
+            return invalid(
+                "Each edit-plan command requires a unique short key and op.");
+        }
+        EditPlanCommand item;
+        item.key = key->as_string();
+        const std::string& operation = op->as_string();
+        if (operation == "object.create_from_alias" ||
+            operation == "object.create_from_media_file") {
+            const Json* layer = find_field(command, "layer");
+            const Json* frame = find_field(command, "frame");
+            const Json* length = find_field(command, "length");
+            if (layer == nullptr || !layer->is_integer() ||
+                frame == nullptr || !frame->is_integer() ||
+                length == nullptr || !length->is_integer() ||
+                layer->as_integer() < 0 || frame->as_integer() < 0 ||
+                length->as_integer() <= 0 ||
+                layer->as_integer() > std::numeric_limits<int>::max() ||
+                frame->as_integer() > std::numeric_limits<int>::max() ||
+                length->as_integer() > std::numeric_limits<int>::max()) {
+                return invalid("A creation command has invalid placement.");
+            }
+            item.layer = static_cast<int>(layer->as_integer());
+            item.frame = static_cast<int>(frame->as_integer());
+            item.length = static_cast<int>(length->as_integer());
+            if (operation == "object.create_from_alias") {
+                const Json* alias = find_field(command, "alias");
+                if (alias == nullptr || !alias->is_string() ||
+                    alias->as_string().empty() ||
+                    alias->as_string().size() > kMaxAliasBytes ||
+                    alias->as_string().find('\0') != std::string::npos ||
+                    alias->as_string().find("[Object]") ==
+                        std::string::npos ||
+                    alias->as_string().find("effect.name=") ==
+                        std::string::npos) {
+                    return invalid("A planned Alias is invalid.");
+                }
+                item.type = EditPlanCommandType::create_alias;
+                item.alias = alias->as_string();
+            } else {
+                const MediaPathParseResult media = parse_media_path(command);
+                if (!media.ok || !media.regular_file) {
+                    return invalid(
+                        media.message.empty()
+                            ? "A planned media path does not exist."
+                            : media.message);
+                }
+                item.type = EditPlanCommandType::create_media;
+                item.file = media.path;
+                const std::string update_error =
+                    parse_updates(command, item.updates, true);
+                if (!update_error.empty()) {
+                    return invalid(update_error);
+                }
+            }
+            const std::string effect_error =
+                parse_effects(command, item.effects);
+            if (!effect_error.empty()) {
+                return invalid(effect_error);
+            }
+            parsed.push_back(std::move(item));
+            continue;
+        }
+
+        const Json* target_value = find_field(command, "target");
+        if (target_value == nullptr || !target_value->is_object()) {
+            return invalid("An edit-plan mutation requires target.");
+        }
+        const TargetParseResult target = parse_object_target(
+            Json::Object{
+                {"expected_revision", *expected},
+                {"target", *target_value},
+            });
+        if (!target.ok) {
+            return invalid(target.message);
+        }
+        item.object_index = target.target.index;
+        if (operation == "object.update") {
+            item.type = EditPlanCommandType::update;
+            const std::string update_error =
+                parse_updates(command, item.updates, true);
+            if (!update_error.empty()) {
+                return invalid(update_error);
+            }
+            if (const Json* name = find_field(command, "name");
+                name != nullptr) {
+                if (!name->is_string() ||
+                    name->as_string().size() > 4096U ||
+                    name->as_string().find('\0') != std::string::npos) {
+                    return invalid("A planned object name is invalid.");
+                }
+                item.name = utf8_to_wide(name->as_string());
+            }
+            if (item.updates.empty() && !item.name.has_value()) {
+                return invalid("An object update has no changed values.");
+            }
+        } else if (operation == "object.move") {
+            const Json* layer = find_field(command, "layer");
+            const Json* frame = find_field(command, "frame");
+            if (layer == nullptr || !layer->is_integer() ||
+                frame == nullptr || !frame->is_integer() ||
+                layer->as_integer() < 0 || frame->as_integer() < 0 ||
+                layer->as_integer() > std::numeric_limits<int>::max() ||
+                frame->as_integer() > std::numeric_limits<int>::max()) {
+                return invalid("A planned move has invalid layer/frame.");
+            }
+            item.type = EditPlanCommandType::move;
+            item.layer = static_cast<int>(layer->as_integer());
+            item.frame = static_cast<int>(frame->as_integer());
+        } else if (operation == "object.delete") {
+            item.type = EditPlanCommandType::remove;
+        } else if (operation == "object.effect.set_enabled") {
+            const Json* selector = find_field(command, "selector");
+            const Json* enabled = find_field(command, "enabled");
+            if (selector == nullptr || !selector->is_string() ||
+                !valid_item_name(selector->as_string()) ||
+                enabled == nullptr || !enabled->is_bool()) {
+                return invalid("A planned effect state is invalid.");
+            }
+            item.type = EditPlanCommandType::set_effect_enabled;
+            item.effect = utf8_to_wide(selector->as_string());
+            item.enabled = enabled->as_bool();
+        } else if (operation == "object.effect.add") {
+            const Json* effect = find_field(command, "effect");
+            if (effect == nullptr || !effect->is_string() ||
+                !valid_item_name(effect->as_string())) {
+                return invalid("A planned effect name is invalid.");
+            }
+            item.type = EditPlanCommandType::add_effect;
+            item.effect = utf8_to_wide(effect->as_string());
+            if (const Json* enabled = find_field(command, "enabled");
+                enabled != nullptr) {
+                if (!enabled->is_bool()) {
+                    return invalid("A planned effect enabled value is invalid.");
+                }
+                item.enabled = enabled->as_bool();
+            }
+            std::vector<ObjectItemUpdate> updates;
+            const std::string update_error =
+                parse_updates(command, updates, true);
+            if (!update_error.empty()) {
+                return invalid(update_error);
+            }
+            for (ObjectItemUpdate& update : updates) {
+                if (update.effect != item.effect) {
+                    return invalid(
+                        "Initial effect items must use the created effect name.");
+                }
+                item.effect_items.push_back(EffectInitialItem{
+                    std::move(update.item),
+                    std::move(update.value),
+                });
+            }
+        } else {
+            return invalid("The edit plan contains an unsupported operation.");
+        }
+        parsed.push_back(std::move(item));
+    }
+
+    const EditPlanResult result = sdk_.run_edit_plan(
+        expected->as_integer(),
+        parsed,
+        apply);
+    Json::Object rollback{
+        {"attempted", Json(result.rollback_attempted)},
+        {"complete", Json(result.rollback_complete)},
+        {"restored_count",
+         Json(static_cast<std::int64_t>(result.restored_count))},
+        {"gui_undo_required", Json(result.gui_undo_required)},
+    };
+    if (!result.ok) {
+        Json::Object details{
+            {"rollback", Json(rollback)},
+        };
+        if (result.failed_command_index !=
+            std::numeric_limits<std::size_t>::max()) {
+            details.emplace(
+                "failed_command_index",
+                Json(static_cast<std::int64_t>(
+                    result.failed_command_index)));
+        }
+        if (result.current_revision >= 0) {
+            details.emplace(
+                "current_revision",
+                Json(result.current_revision));
+        }
+        return make_error_response(
+            request.id,
+            result.error_code,
+            result.error_message,
+            std::move(details),
+            result.retryable);
+    }
+    if (!apply) {
+        return make_success_response(
+            request.id,
+            Json(Json::Object{
+                {"valid", Json(result.valid)},
+                {"command_count",
+                 Json(static_cast<std::int64_t>(parsed.size()))},
+                {"warnings", Json(Json::Array{})},
+            }));
+    }
+    Json::Array command_results;
+    for (std::size_t index = 0U; index < parsed.size(); ++index) {
+        command_results.emplace_back(Json(Json::Object{
+            {"command_index", Json(static_cast<std::int64_t>(index))},
+            {"key", Json(parsed[index].key)},
+            {"status", Json("applied")},
+        }));
+    }
+    return make_success_response(
+        request.id,
+        Json(Json::Object{
+            {"applied_count",
+             Json(static_cast<std::int64_t>(result.applied_count))},
+            {"atomic", Json(false)},
+            {"commands", Json(std::move(command_results))},
+            {"revision",
+             result.current_revision >= 0
+                 ? Json(result.current_revision)
+                 : Json(nullptr)},
+            {"rollback", Json(std::move(rollback))},
+            {"snapshot_required", Json(result.current_revision < 0)},
+            {"undo_grouped", Json(true)},
+            {"undo_unit", Json("single_edit_section")},
+            {"warnings", Json(Json::Array{})},
+        }));
 }
 
 std::string CommandDispatcher::handle_timeline_shift(

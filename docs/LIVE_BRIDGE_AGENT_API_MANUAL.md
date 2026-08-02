@@ -1,19 +1,35 @@
 # AviUtl2 Live Bridge エージェント向け完全APIマニュアル
 
-対象バージョン: plugin / Python client 0.9.3
+対象バージョン: plugin / Python client 0.9.5
 
 Wire protocol: v1 additive
 
 対象OS: Windows
 
-最終更新: 2026-08-01
+最終更新: 2026-08-02
+
+## 0.9.5の主な変更
+
+- 通常のプログラム編集入口を低水準`LiveClient`から高水準`LiveProject`へ移した。
+- 複数操作を事前検証して原則一つのGUI Undo単位で適用する`EditPlan`を追加した。
+- text、shape、image、video、audio、transform、検索、カット、native reviewを
+  英語名と自然単位で操作できる。
+- 主要20 Effectを`effect("glow", ...)`形式でLiveと`.aup2`生成の双方へ適用できる。
+- native mediaが映像・音声別objectでも、一つのcombined MP4 objectでも正しく
+  transformと映像・音声Effectを振り分ける。
+- `LiveClient`と既存protocol v1 endpointは削除せず、raw操作用に維持する。
+
+移行の最短例は`LIVE_BRIDGE_AGENT_QUICK_START.md`、配布時の変更点と既知制約は
+`releases/v0.9.5.md`を参照する。
 
 この文書は、Codex、Claude Code、Copilot CLI、Agent ZeroなどのAIエージェントが、
 ユーザーの開いているAviUtl2プロジェクトをLive Bridge経由で安全に編集するための
 規範的な利用マニュアルである。
 
-通常はPythonの`aviutl2_api.live.LiveClient`を使用する。Named Pipeを直接実装する
-場合だけ「低水準Wire API」を参照すること。
+通常の編集はPythonの`aviutl2_api.live.LiveProject`を使用する。完全Alias、raw
+item、manual revisionまたは未ラップendpointが必要な場合は`LiveProject.client`の
+`LiveClient`へ降りる。Named Pipeを直接実装する場合だけ「低水準Wire API」を
+参照すること。
 
 ## 1. エージェントが必ず守る規則
 
@@ -256,7 +272,7 @@ print(page.offset, page.total, page.next_offset)
 
 ### 4.4 sessionとoperation ID
 
-`LiveClient.connect()`は0.9.3 pluginに対して自動的に`session.open`を呼ぶ。
+`LiveClient.connect()`は0.9.5 pluginに対して自動的に`session.open`を呼ぶ。
 
 ```python
 with LiveClient.connect(pid=32652) as client:
@@ -293,50 +309,137 @@ scene-wide lockではない。エージェントはロック対象を映像上�
 
 ## 5. 推奨高水準workflow
 
-`EditingSession`はcapability確認、preflight、transaction、fresh snapshot、
-native reviewをまとめる。
+### 5.1 `LiveProject`: 標準入口
 
 ```python
-from aviutl2_api.live import (
-    EditingSession,
-    ItemUpdate,
-    LiveClient,
-    TimelineTransactionCommand,
-)
+from aviutl2_api.live import LiveProject
 
-with LiveClient.connect(pid=32652) as client:
-    editing = EditingSession(client)
-
-    report = editing.preflight(
-        subtitle_layers=(10, 11, 12),
-        audio_range=(0, 899),
+with LiveProject.connect(pid=32652) as project:
+    title = project.add_text(
+        "第一章",
+        duration=90,
+        y=-200,
+        size=80,
     )
-    if not report.ready:
-        for issue in report.errors:
-            print(issue.code, issue.message, issue.object_ids)
-        raise RuntimeError("preflight failed")
-
-    snapshot = report.snapshot
-    title = snapshot.objects[0]
-    commands = [
-        TimelineTransactionCommand.set_items(
-            title,
-            (
-                ItemUpdate("テキスト", "テキスト", "新しいタイトル"),
-                ItemUpdate("標準描画", "X", 120.0),
-            ),
-        )
-    ]
-    edited = editing.apply_transaction(commands)
-    print(edited.undo)
-
-    review = editing.review(
-        frames=(0, 30, 60, 90),
-        audio_range=(0, 899),
+    title = project.update(
+        title.primary,
+        x=120,
+        scale=110,
+        opacity=0.9,
     )
-    print(review.audio_analysis)
+    rendered = project.render(title.primary.midpoint)
 ```
 
+`LiveProject`が内部管理するもの:
+
+- compact snapshotとfresh revision
+- connection sessionのoperation ID
+- GUI cursor frame、timeline末尾、serial/parallel配置
+- Layer 0からの未ロック・非衝突layer探索
+- plan内で解決済みの仮想配置、move、delete
+- native media probeとscene FPSによる既定duration
+- 共通transformから実機の`標準描画`またはnative videoの`映像再生`itemへの変換
+- effect/font catalog、既存effect selector/itemのinspection
+
+即時mutationは内部で1 commandの`EditPlan`を作り、更新後の`ObjectGroup`または
+`ObjectSelection`を返す。返された`LiveObject`はそのrevisionだけで有効である。
+
+### 5.2 `EditPlan`: 複数操作
+
+```python
+from aviutl2_api.editing import EditPlan, PlanValidationError
+from aviutl2_api.live import LiveProject
+
+plan = EditPlan(sequence="parallel")
+plan.add_video("intro.mp4", key="intro")
+plan.add_shape(
+    "rectangle",
+    key="panel",
+    duration=90,
+    width=900,
+    height=160,
+    y=-200,
+)
+plan.add_text(
+    "第一章",
+    key="title",
+    duration=90,
+    y=-200,
+    size=80,
+)
+
+with LiveProject.connect(pid=32652) as project:
+    validation = project.validate(plan)
+    if not validation.valid:
+        raise PlanValidationError(validation)
+    result = project.apply(plan)
+    title = result.objects["title"].primary
+```
+
+`sequence="parallel"`は`at`省略objectを同じcursor frameへ置く。
+`sequence="serial"`は省略objectを追加順に直列配置する。`at="end"`は明示的な
+timeline末尾である。Wireへ送る時点では全frame/layerが解決済みであり、Native側は
+自動配置しない。
+
+成功したplanはsingle-useで、再適用はPython側で拒否される。通信再送は同一session
+のoperation ID冪等性で処理される。成功時は原則1回のAviUtl2 GUI Undo単位だが、
+SDKに完全transaction rollbackがないため`PlanResult.atomic`は常に`False`である。
+
+`PlanApplyError.result.rollback`:
+
+- `attempted`: 自動復元を試したか
+- `complete`: Bridgeが把握する作成物・退避objectを復元できたか
+- `restored_count`: 復元できた要素数
+- `gui_undo_required`: ユーザーのGUI Undoが必要か
+- `warnings`: rollback固有の警告
+
+部分適用は成功として返さない。`gui_undo_required=True`なら編集を続行せず、対象PIDと
+失敗内容をユーザーへ示してAviUtl2 GUI Undoを依頼する。
+
+### 5.3 自動配置とtransform
+
+| 引数 | 意味 |
+|---|---|
+| `at=None` | GUI cursor frame |
+| `at="end"` | 現在またはplan仮想配置を含むtimeline末尾 |
+| `layer=None` | Layer 0から下方向へ探索 |
+| `duration=None` | text/image/shapeは60 frame、video/audioはnative duration |
+| `x/y/z` | pixel |
+| `scale` | 100が等倍のpercent |
+| `rotation` | Z軸degree。3Dは`rotation_x/y/z` |
+| `opacity` | 0.0..1.0。AviUtl2「透明度」へ反転変換 |
+| `color` | `#RRGGBB`または`RRGGBB` |
+
+text/shape作成時の`x/y/z`, `scale`, `rotation(_x/_y/_z)`, `opacity`は固定値の
+代わりに`linear(start, end)`を受け取る。AviUtl2の「直線移動」へ変換されるため、
+日本語item名、`AnimatedValue`、Aliasを直接扱う必要はない。`scale`の両端は正、
+`opacity`の両端は`0.0..1.0`でなければならない。
+
+video/audioでnative durationを取得できない場合、`duration`を明示しない限り拒否する。
+相対media pathはPython processのcurrent working directoryを基準にabsolute pathへ
+解決される。
+
+### 5.4 `find`とrevision-scoped参照
+
+```python
+with LiveProject.connect(pid=32652) as project:
+    title = project.find(text="第一章").one()
+    title = project.update(title, text="第1章", x=100).primary
+```
+
+`find(name=, text=, file=, effect=, layer=, at=, api_locked=)`を利用できる。
+通常は`include_alias=False`のsnapshotだけを使い、text/effectは候補objectだけを
+inspection、fileはmedia inventoryで遅延調査する。`one()`は0件と複数件を明示的に
+拒否する。mutation後の古い参照を暗黙に追跡・推測しない。
+
+### 5.5 高度なworkflow
+
+`LiveProject.preflight()`、`review()`、`contact_sheet()`、`audio_review()`が
+native映像・音声検証をまとめる。split/trim/duration/reorder/section/rippleなど
+統一plan外の構造操作は、既存endpointを呼ぶ高水準即時methodまたは
+`project.client`を使う。
+
+`EditingSession`と`LiveClient`は後方互換のadvanced APIとして維持される。
 `EditingSession.undo()`と`redo()`は公式SDK capabilityが追加されるまで
 `CapabilityUnavailableError`を送出する。`UndoReceipt.grouped=True`はGUIの
 Undo単位が一つであることを示すが、Bridgeから実行可能という意味ではない。
@@ -345,6 +448,191 @@ Undo単位が一つであることを示すが、Bridgeから実行可能とい�
 
 以下では`timeout`引数の説明を省略する。指定しなければ接続時の
 `default_timeout`が使用される。
+
+### 6.0 `LiveProject`と共通editing model
+
+Import:
+
+```python
+from aviutl2_api.editing import (
+    AppliedEffect,
+    EditPlan,
+    EffectSpec,
+    LinearMotion,
+    PlanApplyError,
+    PlanResult,
+    PlanValidationError,
+    ProjectChangedError,
+    Transform,
+    effect,
+    linear,
+    native_effect,
+)
+from aviutl2_api.live import LiveObject, LiveProject, ObjectSelection
+```
+
+Connection/state:
+
+```text
+LiveProject.connect(pid=None, pipe_name=None, timeout=5.0) -> LiveProject
+project.refresh() -> ObjectSelection
+project.summary() -> dict[str, object]
+project.preflight(**options) -> PreflightReport
+project.find(name=None, text=None, file=None, effect=None,
+             layer=None, at=None, api_locked=None) -> ObjectSelection
+project.client -> LiveClient
+```
+
+Creation:
+
+```text
+project.add_text(text, **placement_transform_style) -> ObjectGroup
+project.add_image(file, **placement_transform) -> ObjectGroup
+project.add_video(file, **placement_transform) -> ObjectGroup
+project.add_audio(file, **placement_transform) -> ObjectGroup
+project.add_media(file, kind="auto", **placement_transform) -> ObjectGroup
+project.add_shape(shape, **placement_transform_style) -> ObjectGroup
+```
+
+`shape`は`circle`, `rectangle`, `triangle`, `pentagon`, `hexagon`, `star`,
+`heart`, `background`。
+作成系共通引数は`at`, `layer`, `duration`, `x/y/z`, `scale`, `rotation`,
+`rotation_x/y/z`, `opacity`。textは`size`, `color`, `font`、shapeは`width`,
+`height`, `color`も受け取る。media作成のtransformは固定値、text/shape作成は
+固定値または`LinearMotion`を受け取る。
+
+全creation methodは`effects: Sequence[EffectSpec | NativeEffectSpec]`も
+受け取る。指定順、同名Effectの重複、`enabled`を保持し、作成と初期item設定を
+一つのGUI Undo単位で行う。成功時は`PlanResult.effects[key]`にfreshな
+`AppliedEffect` receiptが入る。
+
+native loaderは形式により、映像と音声を別objectにする場合と、`映像再生`を持つ
+一つのcombined objectにする場合がある。`scope="video"` / `scope="audio"`はどちらも
+安全にroutingされ、combined objectでは両scopeの`object_id`が同一になる。
+
+```text
+linear(start: float, end: float) -> LinearMotion
+```
+
+text/shape作成のtransformへ渡すと、指定値をobjectの全durationにわたって
+AviUtl2 native「直線移動」で補間する。
+
+Object/timeline:
+
+```text
+project.update(target, text=None, name=None, **transform) -> ObjectGroup
+project.move(target, at: int, layer: int) -> ObjectGroup
+project.delete(target) -> PlanResult
+project.split(target, frame: int) -> MediaSplit
+project.trim(target, frame_start, frame_end,
+             source_position=None) -> ObjectSelection
+project.set_duration(target, duration) -> ObjectSelection
+```
+
+Effect:
+
+```text
+effect(profile, *, enabled=True, **parameters) -> EffectSpec
+native_effect(name, values, *, enabled=True, scope="primary") -> NativeEffectSpec
+project.available_effect_profiles() -> tuple[str, ...]
+project.apply_effect(target, spec) -> AppliedEffect
+project.update_effect(target, applied_effect, spec) -> AppliedEffect
+project.add_effect(target, effect, values=None) -> ObjectGroup
+project.set_effect_values(target, effect, values) -> ObjectSelection
+project.set_effect_enabled(target, effect, enabled) -> ObjectGroup
+project.delete_effect(target, effect) -> ObjectSelection
+project.reorder_effects(target, effects) -> ObjectSelection
+project.apply_common_effect(target, semantic, values,
+                            effect_name=None) -> (EffectApplication, ObjectSelection)
+```
+
+`effect`にはeffect名または正確なselectorを指定する。effect名が同じものが1個なら
+selectorを内部解決し、複数なら明示selectorを要求する。`add_effect`はeffect catalog、
+`set_effect_values`はobject inspectionで名前・item・lockを確認する。
+主要20 profileは`color_adjustment`, `monochrome`, `gradient`, `crop`,
+`mask`, `resize`, `mosaic`, `blur`, `directional_blur`, `motion_blur`,
+`glow`, `emission`, `outline`, `drop_shadow`, `chroma_key`,
+`luminance_key`, `fade`, `wipe`, `audio_gain`, `audio_fade`。
+pixel、degree、seconds、0.0..1.0 opacity、`#RRGGBB`、boolを使用し、
+動くnumberには`linear(start, end)`を渡す。第三者effectの意味や単位は推測しない。raw値が必要なら
+`project.client.set_item(s)`を使用する。
+
+`.aup2` model backendでも同じspecを使う:
+
+```python
+from aviutl2_api import (
+    apply_effects,
+    compare_aup2_roundtrip,
+    validate_standard_effects,
+)
+from aviutl2_api.editing import effect
+
+apply_effects(
+    project_model,
+    timeline_object,
+    effect("glow", strength=50, color="#FFD966"),
+    effect("outline", size_px=4),
+)
+validation = validate_standard_effects(project_model)
+```
+
+`apply_effects()`はmemory上のmodelだけを変更し、saveは行わない。manifest ID
+`2001901`の完全templateを、AviUtl2のOpen/Save標準に合わせて
+`標準描画` / `音声再生`より後へ挿入し、Effect IDを順序どおりに振り直す。
+明示的な互換project versionは、生成時の`2001901`と、AviUtl2がOpen/Save時に
+更新する`2010200`である。未知の将来versionは推測せず拒否する。無効な標準Effectは
+AviUtl2標準の`effect.disable=1`として生成・検証する。
+`validate_standard_effects()`は未知item、必須item欠落、
+enum、domain/order違反をerror、第三者Effectを`unverified`として返す。
+Open/Save後は`compare_aup2_roundtrip(before, after)`で意味比較できる。ID再採番、
+数値表記、property順、既知default、`Group2/Group3`は正規化し、Effect消失・置換・
+並べ替え・明示値変更は失敗にする。
+
+Review/plan:
+
+```text
+project.render(frame_or_object=None) -> RenderedFrame
+project.contact_sheet(frames=None, columns=4,
+                      thumbnail_width=320) -> ContactSheet
+project.render_audio(frame_start, frame_end) -> RenderedAudio
+project.audio_review(frame_start, frame_end) -> (RenderedAudio, AudioAnalysis)
+project.review(**options) -> ReviewBundle
+project.validate(plan: EditPlan) -> PlanValidation
+project.apply(plan: EditPlan) -> PlanResult
+```
+
+`EditPlan` command builder:
+
+```text
+EditPlan(sequence="parallel" | "serial")
+plan.add_text(..., key=None, effects=None)
+plan.add_image/video/audio/media(..., key=None, effects=None)
+plan.add_shape(..., key=None, effects=None)
+plan.update(target, ..., key=None)
+plan.move(target, at, layer, key=None)
+plan.delete(target, key=None)
+plan.add_effect(target, effect, values=None, key=None)
+plan.set_effect_enabled(target, selector, enabled, key=None)
+```
+
+`plan.commands`はbackend共通の`AddTextInstruction`, `AddMediaInstruction`,
+`AddShapeInstruction`, `UpdateObjectInstruction`, `MoveObjectInstruction`,
+`DeleteObjectInstruction`, `AddEffectInstruction`,
+`SetEffectEnabledInstruction`を保持する。
+
+同一plan内から新規objectを後続commandのtargetにはできない。必要なtransformや
+effect初期値をcreate command自身へ含める。`key`はplan内で一意で、成功resultの
+`objects[key]`へ対応する。省略時は`command-<index>`になる。
+
+型:
+
+| 型 | 主なfield |
+|---|---|
+| `LiveObject` | object ID、revision、layer、frame範囲、duration、midpoint、name、lock |
+| `ObjectSelection` | iterable、`first()`、厳密な`one()` |
+| `PlanValidation` | valid、revision、resolved placements、warnings、errors |
+| `PlanResult` | before/after revision、commands、objects、Undo、atomic、rollback、warnings |
+| `RollbackReceipt` | attempted、complete、restored_count、gui_undo_required、warnings |
 
 ### 6.1 connection、system、event
 
@@ -458,7 +746,7 @@ client.history_undo() -> dict
 client.history_redo() -> dict
 ```
 
-0.9.3では公式SDKに実行APIがなく、呼ぶと`SDK_METHOD_UNAVAILABLE`になる。
+0.9.5では公式SDKに実行APIがなく、呼ぶと`SDK_METHOD_UNAVAILABLE`になる。
 `EditingSession.undo()/redo()`は先にcapabilityを検査し、
 `CapabilityUnavailableError`を送出する。
 
@@ -566,7 +854,8 @@ for obj in created.objects:
 ```
 
 SDKが動画と音声など複数objectを生成した場合、`created.objects`にsnapshot差分の
-全objectが入る。以後一緒に扱うなら`ObjectGroup(created.objects)`を作る。
+全objectが入る。一体型MP4などは映像・音声を持つ一つのobjectになる。以後一緒に
+扱うなら、要素数に依存せず`ObjectGroup(created.objects)`を作る。
 
 #### inventory、relink
 
@@ -1083,11 +1372,17 @@ from aviutl2_api.live import run_preflight
 report = run_preflight(
     client,
     subtitle_layers=(10, 11, 12),
+    subtitle_overlap="warn",
     minimum_subtitle_frames=6,
     audio_range=(0, 899),
     clipping_threshold=1.0,
 )
 ```
+
+`subtitle_layers=None`、`subtitle_overlap="allow"`が既定。一般textを字幕と
+推測しないため、異なるlayerで同時表示されるタイトル・注釈・装飾textだけでは
+字幕warningを出さない。字幕の重複を診断するときだけlayerと`warn`または`error`
+を明示する。
 
 検査code:
 
@@ -1188,369 +1483,40 @@ agentが報告・判断する。
 
 `LiveClient`はcontext managerとして使い、終了時に`close()`する。
 
-## 7. 実践レシピ
+## 7. 実践workflow
 
-### 7.1 既存textを探して変更する
+実行例は重複掲載せず、通常の編集は
+[`LIVE_BRIDGE_AGENT_QUICK_START.md`](LIVE_BRIDGE_AGENT_QUICK_START.md)を正本とする。
+この完全マニュアルでは、必要になった型・method・errorの節だけを参照する。
 
-object indexやlabelだけを信用せずinspectionでtext itemを確認する。
+実践時の原則:
 
-```python
-with LiveClient.connect(pid=32652) as client:
-    snapshot = client.get_snapshot(include_alias=False)
-    text_objects = []
-    for obj in snapshot.objects:
-        inspection = client.inspect_object(obj)
-        if any(
-            item.type == "text"
-            for effect in inspection.effects
-            for item in effect.items
-        ):
-            text_objects.append(obj)
+1. `LiveProject.connect(pid=...)`で対象を固定し、`summary()`とcapabilityを確認する。
+2. `find(...).one()`で対象を一意にし、mutation後は返されたfresh参照を使う。
+3. 複数作成・更新・削除・Effectは`EditPlan`でvalidateしてからapplyする。
+4. split/trim/rippleなどの構造編集後はsnapshotを更新し、関連A/V objectをgroupで扱う。
+5. Effectはsemantic profileとcatalog/inspectionを使い、unknown schemaを推測しない。
+6. boundary/midpointのnative PNGと必要範囲のPCMを取得し、preflightとQCを再実行する。
+7. `atomic=False`、rollback warning、`gui_undo_required`を結果から省略しない。
 
-    if len(text_objects) != 1:
-        raise RuntimeError("対象text objectを一意に特定できません")
-
-    client.set_text(text_objects[0], "差し替え後の字幕")
-    fresh = client.get_snapshot(include_alias=False)
-```
-
-### 7.2 動画と同時生成音声を一緒に移動する
-
-```python
-created = client.add_video(
-    r"D:\assets\intro.mp4",
-    layer=2,
-    frame=0,
-    length=0,
-)
-if not created.objects:
-    raise RuntimeError("fresh created object references are unavailable")
-
-group = ObjectGroup(created.objects)
-receipt = client.move_group(
-    group,
-    frame_delta=90,
-    layer_delta=2,
-)
-```
-
-### 7.3 複数変更を一つのUndo単位にする
-
-```python
-snapshot = client.get_snapshot(include_alias=False)
-obj = snapshot.objects[0]
-inspection = client.inspect_object(obj)
-draw = next(effect for effect in inspection.effects if effect.name == "標準描画")
-
-commands = (
-    TimelineTransactionCommand.set_name(obj, "API edited title"),
-    TimelineTransactionCommand.set_items(
-        obj,
-        (
-            ItemUpdate(draw.selector, "X", 100.0),
-            ItemUpdate(draw.selector, "Y", -50.0),
-        ),
-    ),
-)
-
-validation = client.validate_transaction(
-    expected_revision=snapshot.revision,
-    commands=commands,
-)
-if not validation.valid:
-    raise RuntimeError(validation)
-
-receipt = client.apply_transaction(
-    expected_revision=snapshot.revision,
-    commands=commands,
-    operation_id="title-layout-0001",
-)
-fresh = client.get_snapshot(include_alias=False)
-```
-
-### 7.4 cutしてgapを閉じる
-
-```python
-snapshot = client.get_snapshot(include_alias=False)
-clip = next(
-    obj for obj in snapshot.objects
-    if obj.frame_start < 300 <= obj.frame_end
-)
-
-split = client.split_media(clip, frame=300)
-
-# splitは構造置換なのでfresh snapshotを取り直す。
-snapshot = client.get_snapshot(include_alias=False)
-
-# 300..329が完全に空であることを確認した上で後続を30frame詰める。
-receipt = client.close_gap(
-    expected_revision=snapshot.revision,
-    frame_start=300,
-    frame_end=329,
-)
-```
-
-`ripple_delete`がclip途中を横切る場合は、先に境界でsplitするかtrimする。
-
-### 7.5 effectをcatalog確認後に追加する
-
-```python
-snapshot = client.get_snapshot(include_alias=False)
-obj = snapshot.objects[0]
-
-effects = {}
-start = 0
-while True:
-    page = client.get_effect_catalog(start=start, count=128)
-    effects.update({effect.name: effect for effect in page.effects})
-    if page.next_start is None:
-        break
-    start = page.next_start
-
-effect = effects.get("クリッピング")
-if effect is None:
-    raise RuntimeError("実機にクリッピングeffectがありません")
-
-available_items = {item.name for item in effect.items}
-requested = {"上": 10.0, "下": 10.0}
-if not requested.keys() <= available_items:
-    raise RuntimeError("実機schemaと要求itemが一致しません")
-
-client.apply_common_effect(
-    obj,
-    "crop",
-    requested,
-    effect_name="クリッピング",
-)
-```
-
-### 7.6 字幕を配置してnative reviewする
-
-```python
-policy = SubtitleLayerPolicy(
-    base_layer=10,
-    max_layers=3,
-    overlap="stack",
-)
-result = client.add_subtitles(
-    r"D:\captions\episode01.vtt",
-    layer_policy=policy,
-    language="ja",
-)
-
-snapshot = client.get_snapshot(include_alias=False)
-sheet = client.render_review_contact_sheet(
-    snapshot=snapshot,
-    columns=4,
-    thumbnail_width=320,
-)
-print(result.revision, sheet.frames, len(sheet.png))
-```
-
-### 7.7 完成前QC
-
-```python
-editing = EditingSession(client)
-report = editing.preflight(
-    subtitle_layers=(10, 11, 12),
-    audio_range=(0, 1799),
-)
-
-for issue in report.issues:
-    print(issue.severity, issue.code, issue.message)
-
-review = editing.review(audio_range=(0, 1799))
-assert review.revision == report.revision
-print(review.audio_analysis)
-```
+字幕、Effect、cut、native reviewの短いコード例はQuick Start、Wire payload例は
+`LIVE_BRIDGE_PROTOCOL.md`を参照する。
 
 ## 8. 低水準Wire API
 
-通常のagentはこの節を直接使わず`LiveClient`を使う。
+通常のagentはNamed Pipeを直接実装せず、`LiveProject`または`LiveClient`を使う。
+framing、request/response envelope、全method、limits、payload、error codeの正本は
+[`LIVE_BRIDGE_PROTOCOL.md`](LIVE_BRIDGE_PROTOCOL.md)であり、このマニュアルへ複製しない。
 
-### 8.1 endpointとframing
+Wire APIを直接使うのは次の場合に限る:
 
-endpoint:
+- Python以外のclientを実装する。
+- plugin/client protocolの互換試験を行う。
+- transport、chunk lifecycle、operation ID冪等性を検証する。
 
-```text
-\\.\pipe\AviUtl2.LiveBridge.<PID>
-```
-
-各message:
-
-```text
-uint32 little-endian payload byte length
-UTF-8 JSON payload
-```
-
-payloadは1 byte以上1 MiB以下。Pipeはremote clientを拒否し、ownerとLocal System
-だけをDACLで許可する。同一ユーザーのlocal processに対するclient認証ではない。
-
-request:
-
-```json
-{
-  "id": "req-0001",
-  "protocol_version": 1,
-  "method": "system.hello",
-  "params": {}
-}
-```
-
-success:
-
-```json
-{
-  "id": "req-0001",
-  "ok": true,
-  "result": {}
-}
-```
-
-error:
-
-```json
-{
-  "id": "req-0001",
-  "ok": false,
-  "error": {
-    "code": "STALE_PROJECT_STATE",
-    "message": "The project changed.",
-    "details": {
-      "current_revision": 123458
-    },
-    "retryable": true
-  }
-}
-```
-
-### 8.2 全51メソッド
-
-`T`は共通target params
-`{"expected_revision": int, "target": {"object_id": str}}`を表す。
-mutationにはsession内で一意な`operation_id`を追加できる。
-
-| method | params | 主なresult / 備考 |
-|---|---|---|
-| `system.hello` | `{}` | version、PID、SDK baseline、edit state |
-| `system.ping` | `{}` | `pong` |
-| `system.get_capabilities` | `{}` | methods、limits、backend、release gate |
-| `session.open` | `client_name` | session ID、connection ID、cache limit |
-| `event.watch` | `after_sequence`, `timeout_ms`, optional `types` | events、latest sequence、resync、timeout |
-| `scene.get_current` | `{}` | current scene settings/revision |
-| `scene.update_current` | revision、confirmation、変更field | 非Undo scene update |
-| `effect.catalog` | `start`, `count` | paged effect/item schema |
-| `font.catalog` | `start`, `count` | `entries: string[]` |
-| `palette.catalog` | `start`, `count` | name、RGBA colors |
-| `module.catalog` | `start`, `count` | name、information、type |
-| `project.get_info` | `{}` | resolution、fps、sample rate、cursor、max range |
-| `project.get_layers` | `start`, `count` | revision-scoped layer page |
-| `project.get_snapshot` | paging/filter params | revision-scoped object page |
-| `layer.update` | revision、layer、name/enabled | generic mutation receipt |
-| `media.probe` | absolute `file` | native readability/media info |
-| `media.inventory` | `{}` | all file items、missing/duplicate counts |
-| `media.relink` | revision、`replacements[]` | relink receipt |
-| `object.create_from_alias` | alias、layer、frame、length、optional client ID | create receipt |
-| `object.create_from_media_file` | file、layer、frame、length | actual range、全created objects |
-| `object.inspect` | `T`、optional `sample_frame` | effects/items/tracks/locks |
-| `object.effect.add` | `T`、effect、optional raw `items` object | mutation receipt |
-| `object.effect.delete` | `T`、selector | mutation receipt |
-| `object.effect.set_enabled` | `T`、selector、enabled | mutation receipt |
-| `object.effect.reorder` | `T`、complete `selectors[]` | Alias replacement receipt/order |
-| `object.section.list` | `T` | section boundaries |
-| `object.section.create` | `T`、frame | mutation receipt |
-| `object.section.delete` | `T`、section | mutation receipt |
-| `object.section.move` | `T`、section、frame | mutation receipt |
-| `object.set_item` | `T`、effect、item、raw string value | mutation receipt |
-| `object.set_items` | `T`、`items[]` | mutation receipt |
-| `object.set_name` | `T`、string/null name | mutation receipt |
-| `object.move` | `T`、layer、frame | mutation receipt |
-| `object.delete` | `T` | mutation receipt |
-| `object.split_media` | `T`、frame | left/right range/source position |
-| `object.set_duration` | `T`、duration | Alias replacement receipt |
-| `media.trim` | `T`、inclusive range、optional source position | Alias replacement receipt |
-| `timeline.transaction.validate` | revision、`commands[]` | validation receipt |
-| `timeline.transaction.apply` | revision、`commands[]` | transaction receipt |
-| `timeline.shift_after` | revision、frame、delta、optional scope | transaction receipt |
-| `timeline.ripple_insert` | revision、frame、length、optional object IDs | transaction receipt |
-| `timeline.ripple_delete` | revision、inclusive range、optional object IDs | transaction receipt |
-| `timeline.close_gap` | revision、inclusive range、optional object IDs | transaction receipt |
-| `frame.render` | frame | PNG capture metadata |
-| `frame.read_chunk` | capture ID、index | base64 chunk |
-| `frame.release` | capture ID | released bool |
-| `audio.render` | inclusive frame range、optional revision | f32le capture metadata |
-| `audio.read_chunk` | capture ID、index | base64 chunk |
-| `audio.release` | capture ID | released bool |
-| `batch.validate` | Alias create `commands[]` | placement/structure validation |
-| `batch.apply` | Alias create `commands[]` | grouped non-atomic create receipt |
-
-### 8.3 transaction command wire format
-
-```json
-{
-  "expected_revision": 123456,
-  "commands": [
-    {
-      "op": "move",
-      "target": {"object_id": "obj-123456-0"},
-      "layer": 2,
-      "frame": 120
-    },
-    {
-      "op": "set_items",
-      "target": {"object_id": "obj-123456-1"},
-      "items": [
-        {
-          "effect": "標準描画",
-          "item": "X",
-          "value": "100.000000"
-        }
-      ]
-    },
-    {
-      "op": "set_name",
-      "target": {"object_id": "obj-123456-2"},
-      "name": "label"
-    },
-    {
-      "op": "effect.set_enabled",
-      "target": {"object_id": "obj-123456-3"},
-      "selector": "ぼかし#1",
-      "enabled": false
-    },
-    {
-      "op": "delete",
-      "target": {"object_id": "obj-123456-4"}
-    }
-  ],
-  "operation_id": "transaction-0001"
-}
-```
-
-### 8.4 frame/audio chunk lifecycle
-
-1. `frame.render`または`audio.render`でcapture IDとmetadataを得る。
-2. `index=0..chunk_count-1`を順にreadする。
-3. base64 decodeし、offset、size、EOFを検査する。
-4. 全byteのSHA-256をmetadataと比較する。
-5. 成否にかかわらず`release`する。
-
-captureにはTTL、個数、総memory limitがある。保持し続けない。
-Python `render_frame()`と`render_audio()`はこの処理を自動で行う。
-
-### 8.5 capability falseの予約method
-
-次のmethodは0.9.3の`methods`へ含まれず、直接呼ぶと
-`SDK_METHOD_UNAVAILABLE`になる。
-
-- `scene.list`
-- `scene.create`
-- `scene.duplicate`
-- `scene.switch`
-- `history.undo`
-- `history.redo`
-
-`scene.delete`、project save/export/playback APIは予約methodとしても公開しない。
+直接実装でも、`system.hello`とcapability確認、`session.open`、fresh revision、
+per-window consent、lock、payload/queue limit、frame/audio chunkの`release`、
+partial rollbackの扱いを省略してはならない。SDK handleやpointerはWireへ公開されない。
 
 ## 9. error処理
 
@@ -1580,6 +1546,7 @@ except BridgeRemoteError as error:
 | `LAYER_LOCKED` | 別layerを勝手に選ばず、計画を再評価 |
 | `EFFECT_LOCKED` | effect変更を停止 |
 | `PLACEMENT_COLLISION` | fresh snapshotで衝突objectを確認 |
+| `PLAN_APPLY_FAILED` / `PLAN_SCRATCH_FAILED` | rollback receiptを確認。GUI Undo要求なら停止 |
 | `STRUCTURAL_EDIT_UNSAFE` / `SPLIT_UNSAFE` | 迂回や推測をせず、未対応として報告 |
 | `OPERATION_ID_REUSED` | programming error。同じIDへ異なるpayloadを送らない |
 | `SDK_METHOD_UNAVAILABLE` | capability falseとして扱う |
@@ -1612,11 +1579,21 @@ except BridgeRemoteError as error:
 
 ## 11. security境界
 
+- 外部API連携はAviUtl2の各ウィンドウ・processで起動時に必ずOFFへ戻る。Disable時は
+  Named Pipeとdiscovery entryを公開しない。
 - Named Pipeはremote接続を拒否する。
-- 外部連携Enable後は同一Windowsユーザーのlocal processがclientになり得る。
+- Pipe DACLはLocal SystemとPipe所有者へ制限する。ただし外部連携Enable後は、
+  同一Windowsユーザーで動くlocal processがclientになり得る。
 - session IDは認証tokenではない。
+- mutationはSDK edit callback内でfresh state、`expected_revision`、object ID、
+  API/object/layer/effect lockを再検査する。余分な`unlock`fieldや古いsnapshotで
+  lockを迂回できるとは扱わない。
+- object名先頭のBridge markerはGUI表示用であり、clientはsnapshotの
+  `api_locked`を正式な判定として使う。APIからlock解除methodは提供しない。
 - API lockはLive Bridge mutationに対するlockで、GUI、別plugin、process injection、
   project file直接編集を防ぐものではない。
+- lock対象とは別layerへの新規作成を禁止するscene-wide lockではないため、映像上から
+  lock対象を覆うことは可能である。
 - Aliasはlock中もsnapshotから読み取れる。機密情報保護機能ではない。
 - AIへGUI操作権限を同時に与えると、AIがGUIからAPI lockを解除できる可能性がある。
 - project pathやmedia pathをログ・外部サービスへ送る場合はユーザーのデータ境界を
@@ -1635,7 +1612,7 @@ print(caps["release_gate"])
 # }
 ```
 
-0.9.3で機能を偽装しない外部依存:
+0.9.5で機能を偽装しない外部依存:
 
 - 公式SDKのscene list/create/duplicate/switch
 - 公式SDKのUndo/Redo実行API
@@ -1677,9 +1654,10 @@ SDKへ追加された場合も公開API名は維持し、capabilityと内部back
 
 ## 14. 関連文書
 
+- `docs/LIVE_BRIDGE_AGENT_QUICK_START.md`: Agent向け最短workflow
+- `docs/releases/v0.9.5.md`: 0.9.5の更新・移行手順と既知制約
 - `docs/LIVE_BRIDGE_PROTOCOL.md`: Wire protocol設計と実装根拠
-- `docs/LIVE_BRIDGE_SECURITY.md`: API lockと脅威モデル
-- `docs/LIVE_BRIDGE_DEVELOPMENT.md`: native build/install
-- `docs/LIVE_BRIDGE_V1_ROADMAP.md`: version計画とSDK依存
-- `protocol/CAPABILITIES_0.9.3.json`: 静的capability manifest
+- `docs/LIVE_BRIDGE_DEVELOPMENT.md`: native build、security回帰、manual integration
+- `docs/aup2_format_specification.md`: `.aup2` parser/serializer実装ノート
+- `protocol/CAPABILITIES_0.9.5.json`: 静的capability manifest
 - `protocol/CHANGELOG.md`: protocol変更履歴
