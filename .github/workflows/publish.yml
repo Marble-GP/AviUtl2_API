@@ -33,7 +33,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          # Run the release gate at the declared minimum supported version.
+          # This also keeps mypy's Python 3.10 target aligned with dependency
+          # stubs selected by pip for the executing interpreter.
+          python-version: "3.10"
           cache: pip
 
       - name: Install build and test tools
