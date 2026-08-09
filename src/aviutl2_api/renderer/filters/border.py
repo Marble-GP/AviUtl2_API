@@ -44,12 +44,8 @@ class BorderFilter(FilterEffect):
             Image with border
         """
         # Get border parameters
-        size = get_property_value_at_frame(
-            effect.properties, "サイズ", frame, obj, 5.0
-        )
-        blur = get_property_value_at_frame(
-            effect.properties, "ぼかし", frame, obj, 0.0
-        )
+        size = get_property_value_at_frame(effect.properties, "サイズ", frame, obj, 5.0)
+        blur = get_property_value_at_frame(effect.properties, "ぼかし", frame, obj, 0.0)
         color_hex = get_property_string(effect.properties, "縁色", "ffffff")
 
         if size <= 0:
@@ -82,15 +78,16 @@ class BorderFilter(FilterEffect):
         dilated_alpha = cv2.dilate(alpha, kernel, iterations=1)
 
         # Create border (dilated - original)
-        border_alpha = dilated_alpha.astype(np.int16) - alpha.astype(np.int16)
-        border_alpha = np.clip(border_alpha, 0, 255).astype(np.uint8)
+        border_delta = dilated_alpha.astype(np.int16) - alpha.astype(np.int16)
+        border_alpha = np.clip(border_delta, 0, 255).astype(np.uint8)
 
         # Apply blur if specified
         if blur > 0:
             blur_kernel = int(blur * 2) | 1
             blur_kernel = max(3, blur_kernel)
-            border_alpha = cv2.GaussianBlur(
-                border_alpha, (blur_kernel, blur_kernel), blur
+            border_alpha = np.asarray(
+                cv2.GaussianBlur(border_alpha, (blur_kernel, blur_kernel), blur),
+                dtype=np.uint8,
             )
 
         # Create border layer with color

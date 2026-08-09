@@ -5,10 +5,12 @@ from __future__ import annotations
 import math
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal
+
+from PIL import Image
 
 from aviutl2_api.editing import (
     AppliedEffect,
@@ -16,8 +18,9 @@ from aviutl2_api.editing import (
     EffectDefinition,
     EffectSpec,
     FramePosition,
-    LinearMotion,
+    NativeEffectSpec,
     ObjectReference,
+    PlacementConflictError,
     PlanApplyError,
     PlanCommandResult,
     PlannedPlacement,
@@ -28,40 +31,77 @@ from aviutl2_api.editing import (
     RollbackReceipt,
     Transform,
     TransformValue,
+    ValidationIssue,
 )
 from aviutl2_api.editing import ObjectGroup as EditObjectGroup
+from aviutl2_api.editing_resolver import (
+    TimelineRange,
+)
+from aviutl2_api.editing_resolver import (
+    conflicts as _range_conflicts,
+)
+from aviutl2_api.editing_resolver import (
+    draw_properties as _draw_properties,
+)
+from aviutl2_api.editing_resolver import (
+    image_exif_orientation as _image_exif_orientation,
+)
+from aviutl2_api.editing_resolver import (
+    normalized_color as _normalized_color,
+)
+from aviutl2_api.editing_resolver import (
+    number as _number,
+)
+from aviutl2_api.editing_resolver import (
+    offset_transform_value as _offset_transform_value,
+)
+from aviutl2_api.editing_resolver import (
+    resolve_frame as _resolve_frame,
+)
+from aviutl2_api.editing_resolver import (
+    shape_object as _shape_object,
+)
+from aviutl2_api.editing_resolver import (
+    suggested_layer as _suggested_timeline_layer,
+)
+from aviutl2_api.editing_resolver import (
+    text_object as make_text_object,
+)
+from aviutl2_api.editing_resolver import (
+    track_value as _track_value,
+)
+from aviutl2_api.editing_resolver import (
+    video_object as _video_object,
+)
 from aviutl2_api.effect_profiles import (
     ResolvedEffect,
+    describe_effect_profile,
+    get_effect_profile,
     resolve_effect,
 )
 from aviutl2_api.effect_profiles import (
     available_effect_profiles as _available_effect_profiles,
 )
-from aviutl2_api.models import (
-    AnimatedValue,
-    AnimationParams,
-    Effect,
-    StaticValue,
-    TimelineObject,
-)
 
 from .alias import serialize_object_alias
 from .audio import AudioAnalysis, RenderedAudio
 from .client import LiveClient
-from .commands import CreateFromAliasCommand, ItemUpdate, make_text_object
+from .commands import CreateFromAliasCommand, ItemUpdate
 from .editing import (
     CapabilityUnavailableError,
     EditingSession,
     ReviewBundle,
 )
 from .effects import EffectApplication, EffectSemantic, EffectValue
-from .frame import ContactSheet, RenderedFrame
+from .frame import ContactSheet, RenderedFrame, RenderedPreview, make_preview
 from .inspection import EffectInspection, ObjectInspection
 from .media import MediaSplit
 from .protocol import BridgeRemoteError
 from .qc import PreflightReport
 from .snapshot import ProjectSnapshot, SnapshotObject
 from .timeline import TimelineTransactionCommand
+
+_TIMELINE_LAYER_LIMIT = 999
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,60 +185,19 @@ class _CatalogEffectSchema:
     audio: bool
 
 
-def _normalized_color(value: str) -> str:
-    color = value.removeprefix("#").lower()
-    if len(color) != 6 or any(char not in "0123456789abcdef" for char in color):
-        raise ValueError("color must contain six hexadecimal RGB digits")
-    return color
+_ProjectedRange = TimelineRange
 
 
-def _number(value: object, name: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"{name} must be numeric")
-    return float(value)
-
-
-def _track_value(
-    value: TransformValue | None,
-    *,
-    default: float = 0.0,
-    invert_opacity: bool = False,
-) -> StaticValue | AnimatedValue:
-    def convert(number: float) -> float:
-        return (1.0 - number) * 100.0 if invert_opacity else number
-
-    if value is None:
-        return StaticValue(convert(default))
-    if isinstance(value, LinearMotion):
-        return AnimatedValue(
-            convert(value.start),
-            convert(value.end),
-            AnimationParams("直線移動", "0"),
-        )
-    return StaticValue(convert(float(value)))
-
-
-def _draw_properties(transform: Transform) -> dict[str, object]:
-    return {
-        "X": _track_value(transform.x),
-        "Y": _track_value(transform.y),
-        "Z": _track_value(transform.z),
-        "Group": StaticValue(1.0),
-        "中心X": StaticValue(0.0),
-        "中心Y": StaticValue(0.0),
-        "中心Z": StaticValue(0.0),
-        "X軸回転": _track_value(transform.rotation_x),
-        "Y軸回転": _track_value(transform.rotation_y),
-        "Z軸回転": _track_value(transform.effective_rotation_z),
-        "拡大率": _track_value(transform.scale, default=100.0),
-        "縦横比": StaticValue(0.0),
-        "透明度": _track_value(
-            transform.opacity,
-            default=1.0,
-            invert_opacity=True,
-        ),
-        "合成モード": "通常",
-    }
+def _validation_issue(error: Exception) -> ValidationIssue:
+    if isinstance(error, PlacementConflictError):
+        return ValidationIssue(error.code, str(error), error.details)
+    if isinstance(error, BridgeRemoteError):
+        return ValidationIssue(error.code, error.message, error.details)
+    if isinstance(error, PermissionError):
+        return ValidationIssue("PERMISSION_DENIED", str(error))
+    if isinstance(error, ConnectionError):
+        return ValidationIssue("CONNECTION_ERROR", str(error))
+    return ValidationIssue("INVALID_EDIT_PLAN", str(error))
 
 
 def _transform_updates(
@@ -227,58 +226,6 @@ def _transform_updates(
     )
 
 
-def _shape_object(
-    shape: str,
-    *,
-    layer: int,
-    frame: int,
-    duration: int,
-    color: str,
-    width: float,
-    height: float,
-    transform: Transform,
-) -> TimelineObject:
-    names = {
-        "circle": "円",
-        "rectangle": "四角形",
-        "triangle": "三角形",
-        "pentagon": "五角形",
-        "hexagon": "六角形",
-        "star": "星型",
-        "heart": "ハート",
-        "background": "背景",
-    }
-    if shape not in names:
-        raise ValueError(
-            "shape must be circle, rectangle, triangle, pentagon, hexagon, "
-            "star, heart, or background"
-        )
-    if width <= 0.0 or height <= 0.0:
-        raise ValueError("shape width/height must be positive")
-    aspect = (height / width - 1.0) * 100.0
-    return TimelineObject(
-        object_id=0,
-        layer=layer,
-        frame_start=frame,
-        frame_end=frame + duration - 1,
-        effects=[
-            Effect(
-                effect_id=0,
-                name="図形",
-                properties={
-                    "図形の種類": names[shape],
-                    "サイズ": StaticValue(float(width)),
-                    "縦横比": StaticValue(aspect),
-                    "ライン幅": StaticValue(4000.0),
-                    "色": _normalized_color(color),
-                    "角を丸くする": StaticValue(0.0),
-                },
-            ),
-            Effect(1, "標準描画", _draw_properties(transform)),
-        ],
-    )
-
-
 class LiveProject:
     """High-level, compact wrapper around :class:`LiveClient`."""
 
@@ -299,6 +246,12 @@ class LiveProject:
         """Return the low-level escape hatch for advanced protocol operations."""
         return self._client
 
+    @property
+    def capabilities(self) -> Mapping[str, object]:
+        """Return the negotiated host capability manifest."""
+
+        return dict(self._editing.capabilities)
+
     @classmethod
     def connect(
         cls,
@@ -311,7 +264,19 @@ class LiveProject:
 
     @property
     def snapshot(self) -> ProjectSnapshot | None:
+        """Return the last cached snapshot, or ``None`` before the first read."""
+
         return self._snapshot
+
+    @property
+    def objects(self) -> ObjectSelection:
+        """Return objects from the cached snapshot, refreshing when necessary."""
+
+        if self._snapshot is None:
+            return self.refresh()
+        return ObjectSelection(
+            tuple(LiveObject(value) for value in self._snapshot.objects)
+        )
 
     @staticmethod
     def _cursor_value(info: Mapping[str, object], name: str) -> int | None:
@@ -325,16 +290,28 @@ class LiveProject:
                 return value
         return None
 
-    def refresh(self) -> ObjectSelection:
-        self._snapshot = self.client.get_snapshot(include_alias=False)
-        self._project_info = self.client.get_project_info()
-        return ObjectSelection(
-            tuple(LiveObject(value) for value in self._snapshot.objects)
-        )
+    def get_snapshot(self, *, include_alias: bool = False) -> ProjectSnapshot:
+        """Read and cache one fresh, immutable timeline snapshot."""
 
-    def summary(self) -> dict[str, object]:
-        if self._snapshot is None or self._project_info is None:
-            self.refresh()
+        self._snapshot = self.client.get_snapshot(include_alias=include_alias)
+        self._project_info = self.client.get_project_info()
+        return self._snapshot
+
+    def refresh(self) -> ObjectSelection:
+        """Refresh state and return a compact object selection.
+
+        Use :meth:`get_snapshot` when the revision and scene metadata are
+        needed.  ``snapshot`` is the cached property and is not callable.
+        """
+
+        snapshot = self.get_snapshot(include_alias=False)
+        return ObjectSelection(tuple(LiveObject(value) for value in snapshot.objects))
+
+    def summary(self, *, refresh: bool = True) -> dict[str, object]:
+        """Return a compact project summary, fresh by default."""
+
+        if refresh or self._snapshot is None or self._project_info is None:
+            self.get_snapshot(include_alias=False)
         assert self._snapshot is not None and self._project_info is not None
         return {
             "revision": self._snapshot.revision,
@@ -350,26 +327,61 @@ class LiveProject:
         self,
         *,
         name: str | None = None,
+        name_contains: str | None = None,
         text: str | None = None,
+        text_contains: str | None = None,
         file: str | Path | None = None,
+        file_contains: str | None = None,
         effect: str | None = None,
         layer: int | None = None,
         at: int | None = None,
+        overlap: tuple[int, int] | None = None,
         api_locked: bool | None = None,
     ) -> ObjectSelection:
+        """Find objects using compact snapshot filters and lazy inspection.
+
+        ``at`` selects objects visible at one frame. ``overlap=(start, end)``
+        selects objects intersecting a frame range. File and text inspection is
+        performed only after the compact filters have reduced the candidates.
+        """
+
+        if overlap is not None:
+            overlap_start, overlap_end = overlap
+            if (
+                isinstance(overlap_start, bool)
+                or isinstance(overlap_end, bool)
+                or overlap_start < 0
+                or overlap_end < overlap_start
+            ):
+                raise ValueError("overlap must be a non-negative (start, end) range")
         self.refresh()
         assert self._snapshot is not None
         candidates = [
             value
             for value in self._snapshot.objects
             if (name is None or value.name == name)
+            and (
+                name_contains is None
+                or (
+                    value.name is not None
+                    and name_contains.casefold() in value.name.casefold()
+                )
+            )
             and (layer is None or value.layer == layer)
             and (at is None or value.frame_start <= at <= value.frame_end)
+            and (
+                overlap is None
+                or (value.frame_start <= overlap[1] and overlap[0] <= value.frame_end)
+            )
             and (api_locked is None or value.api_locked is api_locked)
         ]
-        file_ids: set[str] | None = None
-        if file is not None:
-            requested = str(Path(file).expanduser().resolve()).casefold()
+        if file is not None or file_contains is not None:
+            requested = (
+                str(Path(file).expanduser().resolve()).casefold()
+                if file is not None
+                else None
+            )
+            contains = file_contains.casefold() if file_contains is not None else None
             inventory = self.client.get_media_inventory()
             if inventory.revision != self._snapshot.revision:
                 raise ProjectChangedError(
@@ -378,15 +390,24 @@ class LiveProject:
             file_ids = {
                 item.object_id
                 for item in inventory.files
-                if str(Path(item.file).expanduser().resolve()).casefold() == requested
+                if (
+                    requested is None
+                    or str(Path(item.file).expanduser().resolve()).casefold()
+                    == requested
+                )
+                and (contains is None or contains in str(item.file).casefold())
             }
             candidates = [value for value in candidates if value.object_id in file_ids]
-        if text is not None or effect is not None:
+        if text is not None or text_contains is not None or effect is not None:
+            requested_effect = effect
+            if effect in _available_effect_profiles():
+                assert effect is not None
+                requested_effect = get_effect_profile(effect).native_name
             inspected: list[SnapshotObject] = []
             for value in candidates:
                 details = self.client.inspect_object(value)
-                effect_match = effect is None or any(
-                    item.name == effect or item.selector == effect
+                effect_match = requested_effect is None or any(
+                    item.name == requested_effect or item.selector == requested_effect
                     for item in details.effects
                 )
                 text_match = text is None or any(
@@ -394,10 +415,145 @@ class LiveProject:
                     for candidate_effect in details.effects
                     for item in candidate_effect.items
                 )
-                if effect_match and text_match:
+                text_contains_match = text_contains is None or any(
+                    item.name == "テキスト"
+                    and item.raw_value is not None
+                    and text_contains.casefold() in item.raw_value.casefold()
+                    for candidate_effect in details.effects
+                    for item in candidate_effect.items
+                )
+                if effect_match and text_match and text_contains_match:
                     inspected.append(value)
             candidates = inspected
         return ObjectSelection(tuple(LiveObject(value) for value in candidates))
+
+    def find_objects(self, **filters: Any) -> ObjectSelection:
+        """Discoverable alias for :meth:`find` used by agent-written code."""
+
+        return self.find(**filters)
+
+    def describe_effect(self, profile: str) -> dict[str, object]:
+        """Describe one semantic effect and its availability in this host."""
+
+        schema = describe_effect_profile(profile)
+        try:
+            self._resolve_effect_stack((EffectSpec(profile, {}),))
+        except (ConnectionError, TypeError, ValueError) as error:
+            schema["available"] = False
+            schema["unavailable_reason"] = str(error)
+        else:
+            schema["available"] = True
+            schema["unavailable_reason"] = None
+        return schema
+
+    @staticmethod
+    def describe_property(name: str) -> dict[str, object]:
+        """Describe a high-level transform property without localized names."""
+
+        properties: dict[str, dict[str, object]] = {
+            "x": {"type": "number", "unit": "pixel", "supports_linear": True},
+            "y": {"type": "number", "unit": "pixel", "supports_linear": True},
+            "z": {"type": "number", "unit": "pixel", "supports_linear": True},
+            "scale": {
+                "type": "number",
+                "unit": "percent",
+                "minimum_exclusive": 0.0,
+                "native_size": 100.0,
+                "supports_linear": True,
+            },
+            "rotation": {
+                "type": "number",
+                "unit": "degree",
+                "supports_linear": True,
+            },
+            "rotation_x": {
+                "type": "number",
+                "unit": "degree",
+                "supports_linear": True,
+            },
+            "rotation_y": {
+                "type": "number",
+                "unit": "degree",
+                "supports_linear": True,
+            },
+            "rotation_z": {
+                "type": "number",
+                "unit": "degree",
+                "supports_linear": True,
+            },
+            "opacity": {
+                "type": "number",
+                "unit": "normalized_0_to_1",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "meaning": "0 is transparent; 1 is opaque",
+                "supports_linear": True,
+            },
+        }
+        try:
+            return {"kind": "property", "name": name, **properties[name]}
+        except KeyError as error:
+            raise KeyError(f"unknown high-level property: {name!r}") from error
+
+    @staticmethod
+    def describe_api(operation: str) -> dict[str, object]:
+        """Return short machine-readable guidance for commonly confused APIs."""
+
+        operations: dict[str, dict[str, object]] = {
+            "state": {
+                "fresh_snapshot": "project.get_snapshot()",
+                "fresh_objects": "project.refresh()",
+                "cached_snapshot": "project.snapshot",
+                "cached_objects": "project.objects",
+                "note": "snapshot is a property and is not callable",
+            },
+            "render": {
+                "call": "project.render(frame, output_path=None, overwrite=False)",
+                "returns": "RenderedFrame",
+                "vision_note": (
+                    "Saving a file is not vision verification; attach "
+                    "RenderedPreview.data using the agent framework."
+                ),
+            },
+            "find": {
+                "call": "project.find_objects(...) or project.find(...)",
+                "filters": (
+                    "name",
+                    "name_contains",
+                    "text",
+                    "text_contains",
+                    "file",
+                    "file_contains",
+                    "effect",
+                    "layer",
+                    "at",
+                    "overlap",
+                    "api_locked",
+                ),
+            },
+            "add_image": {
+                "call": (
+                    "project.add_image(path, fit='contain', "
+                    "apply_exif_orientation=True)"
+                ),
+                "fit_values": ("contain", "cover", None),
+                "scale_unit": "percent; 100 is native size",
+            },
+        }
+        try:
+            return {"kind": "api", "operation": operation, **operations[operation]}
+        except KeyError as error:
+            raise KeyError(f"unknown API description: {operation!r}") from error
+
+    def describe_schema(self, subject: str) -> dict[str, object]:
+        """Describe an effect, transform property, or common API operation."""
+
+        if subject in _available_effect_profiles():
+            return self.describe_effect(subject)
+        try:
+            return self.describe_property(subject)
+        except KeyError:
+            return self.describe_api(subject)
 
     def preflight(self, **kwargs: Any) -> PreflightReport:
         report = self._editing.preflight(**kwargs)
@@ -405,7 +561,16 @@ class LiveProject:
         self._project_info = self.client.get_project_info()
         return report
 
-    def render(self, target: int | ObjectReference | None = None) -> RenderedFrame:
+    def render(
+        self,
+        target: int | ObjectReference | None = None,
+        *,
+        output_path: str | PathLike[str] | None = None,
+        overwrite: bool = False,
+        timeout: float = 30.0,
+    ) -> RenderedFrame:
+        """Render one native frame, optionally saving the returned PNG."""
+
         if target is None:
             info = self.client.get_project_info()
             frame = self._cursor_value(info, "frame")
@@ -415,7 +580,67 @@ class LiveProject:
             frame = target
         else:
             frame = target.midpoint
-        return self.client.render_frame(frame)
+        return self.client.render_frame(
+            frame,
+            output_path=output_path,
+            overwrite=overwrite,
+            timeout=timeout,
+        )
+
+    def render_preview(
+        self,
+        target: int | ObjectReference | None = None,
+        *,
+        max_width: int | None = 480,
+        max_height: int | None = None,
+        format: Literal["jpg", "jpeg", "png"] = "jpeg",
+        quality: int = 85,
+        output_path: str | PathLike[str] | None = None,
+        overwrite: bool = False,
+        timeout: float = 30.0,
+    ) -> RenderedPreview:
+        """Return a compact image for a model/tool vision attachment."""
+
+        preview = make_preview(
+            self.render(target, timeout=timeout),
+            max_width=max_width,
+            max_height=max_height,
+            format=format,
+            quality=quality,
+        )
+        if output_path is not None:
+            preview.save(output_path, overwrite=overwrite)
+        return preview
+
+    def render_previews(
+        self,
+        targets: Sequence[int | ObjectReference],
+        *,
+        max_width: int | None = 480,
+        max_height: int | None = None,
+        format: Literal["jpg", "jpeg", "png"] = "jpeg",
+        quality: int = 85,
+        timeout_per_frame: float = 30.0,
+    ) -> tuple[RenderedPreview, ...]:
+        """Render up to 64 frames and return compact in-memory images."""
+
+        frames = tuple(
+            target if isinstance(target, int) else target.midpoint for target in targets
+        )
+        rendered = self.client.render_frames(
+            frames,
+            timeout_per_frame=timeout_per_frame,
+        )
+        return tuple(
+            make_preview(
+                frame,
+                max_width=max_width,
+                max_height=max_height,
+                format=format,
+                quality=quality,
+            )
+            for frame in rendered
+        )
 
     def review(self, **kwargs: Any) -> ReviewBundle:
         return self._editing.review(**kwargs)
@@ -426,12 +651,26 @@ class LiveProject:
         *,
         columns: int = 4,
         thumbnail_width: int = 320,
+        output_path: str | PathLike[str] | None = None,
+        overwrite: bool = False,
     ) -> ContactSheet:
-        return self._editing.review(
+        sheet = self._editing.review(
             frames=frames,
             columns=columns,
             thumbnail_width=thumbnail_width,
         ).contact_sheet
+        if output_path is not None:
+            sheet.save(output_path, overwrite=overwrite)
+        return sheet
+
+    def render_contact_sheet(
+        self,
+        frames: Sequence[int] | None = None,
+        **kwargs: Any,
+    ) -> ContactSheet:
+        """Discoverable alias for :meth:`contact_sheet`."""
+
+        return self.contact_sheet(frames, **kwargs)
 
     def render_audio(self, frame_start: int, frame_end: int) -> RenderedAudio:
         snapshot = self.client.get_snapshot(include_alias=False)
@@ -452,12 +691,15 @@ class LiveProject:
         return audio, audio.analyze()
 
     def _current(self, target: object) -> SnapshotObject:
-        if isinstance(target, LiveObject):
-            value = target.snapshot_object
-        elif isinstance(target, SnapshotObject):
-            value = target
+        candidate = getattr(target, "live", target)
+        if isinstance(candidate, LiveObject):
+            value = candidate.snapshot_object
+        elif isinstance(candidate, SnapshotObject):
+            value = candidate
         else:
-            raise TypeError("target must be a LiveObject or SnapshotObject")
+            raise TypeError(
+                "target must be a LiveObject, SnapshotObject, or SyncedObject"
+            )
         if self._snapshot is None:
             self.refresh()
         assert self._snapshot is not None
@@ -517,7 +759,12 @@ class LiveProject:
             start += len(page.layers)
             if not page.layers:
                 break
-        return locked, layer_max
+        # EDIT_INFO.layer_max is the highest layer that currently contains an
+        # object, not the highest layer on which AviUtl2 can create one. An
+        # empty project therefore reports zero even though lower timeline
+        # layers remain available. The plugin still performs the authoritative
+        # layer-lock check during validation and apply.
+        return locked, max(layer_max, _TIMELINE_LAYER_LIMIT)
 
     def _effects(self) -> dict[str, tuple[frozenset[str], ...]]:
         if self._effect_schemas is not None:
@@ -649,12 +896,46 @@ class LiveProject:
         layer: int,
         frame: int,
         duration: int,
-        ranges: Sequence[tuple[int, int, int]],
+        ranges: Sequence[_ProjectedRange],
     ) -> bool:
-        end = frame + duration - 1
-        return any(
-            item_layer == layer and item_start <= end and frame <= item_end
-            for item_layer, item_start, item_end in ranges
+        return bool(
+            _range_conflicts(
+                ranges,
+                layer=layer,
+                frame=frame,
+                duration=duration,
+            )
+        )
+
+    @staticmethod
+    def _conflicts(
+        layer: int,
+        frame: int,
+        duration: int,
+        ranges: Sequence[_ProjectedRange],
+    ) -> tuple[str, ...]:
+        return _range_conflicts(
+            ranges,
+            layer=layer,
+            frame=frame,
+            duration=duration,
+        )
+
+    @staticmethod
+    def _suggested_layer(
+        *,
+        frame: int,
+        duration: int,
+        ranges: Sequence[_ProjectedRange],
+        locked_layers: set[int],
+        layer_max: int,
+    ) -> int | None:
+        return _suggested_timeline_layer(
+            ranges,
+            frame=frame,
+            duration=duration,
+            locked_layers=locked_layers,
+            layer_max=layer_max,
         )
 
     def _resolve(self, plan: EditPlan) -> _ResolvedPlan:
@@ -670,12 +951,15 @@ class LiveProject:
             raise ConnectionError("Live Bridge returned an invalid cursor frame")
         locked_layers, layer_max = self._layers(snapshot.revision)
         projected = [
-            (item.layer, item.frame_start, item.frame_end) for item in snapshot.objects
-        ]
-        virtual_ranges = {
-            item.object_id: (item.layer, item.frame_start, item.frame_end)
+            _ProjectedRange(
+                item.layer,
+                item.frame_start,
+                item.frame_end,
+                item.object_id,
+            )
             for item in snapshot.objects
-        }
+        ]
+        virtual_ranges = {item.reference: item for item in projected}
         serial_frame = cursor
         wire: list[dict[str, Any]] = []
         placements: list[PlannedPlacement] = []
@@ -701,13 +985,15 @@ class LiveProject:
                     )
                 initial_effects = self._resolve_effect_stack(raw_effects)
                 at = command.values["at"]
-                if at == "end":
-                    frame = max((item[2] for item in projected), default=-1) + 1
-                elif at is None:
-                    frame = serial_frame if plan.sequence == "serial" else cursor
-                else:
-                    assert isinstance(at, int)
-                    frame = at
+                if at is not None and at != "end" and not isinstance(at, int):
+                    raise TypeError("at must be a frame number, 'end', or None")
+                frame = _resolve_frame(
+                    at,
+                    sequence=plan.sequence,
+                    cursor_frame=cursor,
+                    serial_frame=serial_frame,
+                    ranges=projected,
+                )
                 duration_value = command.values["duration"]
                 media_probe = None
                 if command.op == "add_media":
@@ -752,24 +1038,18 @@ class LiveProject:
                     duration = duration_value
                 requested_layer = command.values["layer"]
                 if requested_layer is None:
-                    layer = next(
-                        (
-                            candidate
-                            for candidate in range(layer_max + 1)
-                            if candidate not in locked_layers
-                            and not self._occupied(
-                                candidate,
-                                frame,
-                                duration,
-                                projected,
-                            )
-                        ),
-                        -1,
+                    suggested = self._suggested_layer(
+                        frame=frame,
+                        duration=duration,
+                        ranges=projected,
+                        locked_layers=locked_layers,
+                        layer_max=layer_max,
                     )
-                    if layer < 0:
+                    if suggested is None:
                         raise ValueError(
                             "no unlocked collision-free layer is available"
                         )
+                    layer = suggested
                 else:
                     assert isinstance(requested_layer, int)
                     layer = requested_layer
@@ -780,14 +1060,108 @@ class LiveProject:
                     if layer in locked_layers:
                         raise PermissionError("requested layer is locked")
                     if self._occupied(layer, frame, duration, projected):
-                        raise ValueError("requested timeline placement is occupied")
-                projected.append((layer, frame, frame + duration - 1))
+                        raise PlacementConflictError(
+                            layer=layer,
+                            frame_start=frame,
+                            frame_end=frame + duration - 1,
+                            conflicting_object_ids=self._conflicts(
+                                layer,
+                                frame,
+                                duration,
+                                projected,
+                            ),
+                            suggested_layer=self._suggested_layer(
+                                frame=frame,
+                                duration=duration,
+                                ranges=projected,
+                                locked_layers=locked_layers,
+                                layer_max=layer_max,
+                            ),
+                        )
+                projected.append(
+                    _ProjectedRange(
+                        layer,
+                        frame,
+                        frame + duration - 1,
+                        f"plan:{key}",
+                    )
+                )
                 if plan.sequence == "serial" and at is None:
                     serial_frame = frame + duration
                 placement = PlannedPlacement(index, key, layer, frame, duration)
                 placements.append(placement)
                 transform = command.values["transform"]
                 assert isinstance(transform, Transform)
+                if command.op == "add_media" and media_probe is not None:
+                    media_file = command.values["file"]
+                    if not isinstance(media_file, Path):
+                        raise TypeError("media file must be a path")
+                    apply_orientation = command.values.get(
+                        "apply_exif_orientation",
+                        False,
+                    )
+                    if not isinstance(apply_orientation, bool):
+                        raise TypeError("apply_exif_orientation must be bool")
+                    orientation = 1
+                    if apply_orientation:
+                        if media_probe.kind != "image":
+                            raise ValueError(
+                                "apply_exif_orientation is supported only for images"
+                            )
+                        orientation = _image_exif_orientation(media_file)
+                        if orientation in {2, 4, 5, 7}:
+                            raise ValueError(
+                                "mirrored EXIF orientations cannot be represented "
+                                "safely; normalize the image pixels first"
+                            )
+                        rotation_offset = {1: 0.0, 3: 180.0, 6: 90.0, 8: -90.0}[
+                            orientation
+                        ]
+                        if rotation_offset:
+                            transform = replace(
+                                transform,
+                                rotation=None,
+                                rotation_z=_offset_transform_value(
+                                    transform.effective_rotation_z,
+                                    rotation_offset,
+                                ),
+                            )
+                    fit = command.values.get("fit")
+                    if fit not in {None, "contain", "cover"}:
+                        raise ValueError("fit must be 'contain', 'cover', or None")
+                    if fit is not None:
+                        if media_probe.kind == "audio":
+                            raise ValueError("fit is not supported for audio media")
+                        source_width = media_probe.width
+                        source_height = media_probe.height
+                        if source_width <= 0 or source_height <= 0:
+                            if media_probe.kind != "image":
+                                raise ValueError(
+                                    "native media dimensions are unavailable; "
+                                    "specify scale explicitly"
+                                )
+                            try:
+                                with Image.open(media_file) as image:
+                                    source_width, source_height = image.size
+                            except (OSError, ValueError) as error:
+                                raise ValueError(
+                                    "image dimensions are unavailable; specify "
+                                    "scale explicitly"
+                                ) from error
+                        if apply_orientation and orientation in {5, 6, 7, 8}:
+                            source_width, source_height = (
+                                source_height,
+                                source_width,
+                            )
+                        scene = self.client.get_current_scene()
+                        ratios = (
+                            scene.width / source_width,
+                            scene.height / source_height,
+                        )
+                        scale = (
+                            min(ratios) if fit == "contain" else max(ratios)
+                        ) * 100.0
+                        transform = replace(transform, scale=scale)
                 if (
                     command.op == "add_media"
                     and media_probe is not None
@@ -852,27 +1226,51 @@ class LiveProject:
                     if not isinstance(media_file, Path):
                         raise TypeError("media file must be a path")
                     assert media_probe is not None
-                    transform_effect = (
-                        "映像再生" if media_probe.kind == "video" else "標準描画"
-                    )
-                    wire.append(
-                        {
-                            "op": "object.create_from_media_file",
-                            "key": key,
-                            "file": str(media_file.expanduser().resolve()),
-                            "layer": layer,
-                            "frame": frame,
-                            "length": duration,
-                            "items": [
-                                value.to_wire()
-                                for value in _transform_updates(
-                                    transform,
-                                    effect=transform_effect,
-                                )
-                            ],
-                            "effects": self._wire_effects(initial_effects),
-                        }
-                    )
+                    if (
+                        media_probe.kind == "video"
+                        and media_probe.audio_track_count > 0
+                    ):
+                        obj = _video_object(
+                            media_file,
+                            layer=layer,
+                            frame=frame,
+                            duration=duration,
+                            transform=transform,
+                            include_audio=True,
+                        )
+                        wire.append(
+                            {
+                                "op": "object.create_from_alias",
+                                "key": key,
+                                "alias": serialize_object_alias(obj),
+                                "layer": layer,
+                                "frame": frame,
+                                "length": duration,
+                                "effects": self._wire_effects(initial_effects),
+                            }
+                        )
+                    else:
+                        transform_effect = (
+                            "映像再生" if media_probe.kind == "video" else "標準描画"
+                        )
+                        wire.append(
+                            {
+                                "op": "object.create_from_media_file",
+                                "key": key,
+                                "file": str(media_file.expanduser().resolve()),
+                                "layer": layer,
+                                "frame": frame,
+                                "length": duration,
+                                "items": [
+                                    value.to_wire()
+                                    for value in _transform_updates(
+                                        transform,
+                                        effect=transform_effect,
+                                    )
+                                ],
+                                "effects": self._wire_effects(initial_effects),
+                            }
+                        )
                 effect_stacks.append(initial_effects)
                 continue
             target = self._current(command.target)
@@ -925,12 +1323,32 @@ class LiveProject:
                     target.duration_frames,
                     projected,
                 ):
+                    conflicting_ids = self._conflicts(
+                        layer_value,
+                        frame_value,
+                        target.duration_frames,
+                        projected,
+                    )
+                    suggested_layer = self._suggested_layer(
+                        frame=frame_value,
+                        duration=target.duration_frames,
+                        ranges=projected,
+                        locked_layers=locked_layers,
+                        layer_max=layer_max,
+                    )
                     projected.append(old_range)
-                    raise ValueError("requested timeline placement is occupied")
-                new_range = (
+                    raise PlacementConflictError(
+                        layer=layer_value,
+                        frame_start=frame_value,
+                        frame_end=frame_value + target.duration_frames - 1,
+                        conflicting_object_ids=conflicting_ids,
+                        suggested_layer=suggested_layer,
+                    )
+                new_range = _ProjectedRange(
                     layer_value,
                     frame_value,
                     frame_value + target.duration_frames - 1,
+                    target.object_id,
                 )
                 projected.append(new_range)
                 virtual_ranges[target.object_id] = new_range
@@ -986,6 +1404,29 @@ class LiveProject:
                         "enabled": command.values["enabled"],
                     }
                 )
+            elif command.op == "apply_effect":
+                spec = command.values["spec"]
+                if not isinstance(spec, (EffectSpec, NativeEffectSpec)):
+                    raise TypeError("semantic effect command has an invalid spec")
+                resolved_effects = self._resolve_effect_stack((spec,))
+                resolved_effect = resolved_effects[0]
+                wire.append(
+                    {
+                        "op": "object.effect.add",
+                        "key": key,
+                        "target": target_wire,
+                        "effect": resolved_effect.native_name,
+                        "items": [
+                            ItemUpdate(
+                                resolved_effect.native_name,
+                                name,
+                                value,
+                            ).to_wire()
+                            for name, value in resolved_effect.items
+                        ],
+                        "enabled": resolved_effect.enabled,
+                    }
+                )
             elif command.op == "set_effect_enabled":
                 wire.append(
                     {
@@ -1018,12 +1459,23 @@ class LiveProject:
                 value for value in result.get("warnings", []) if isinstance(value, str)
             )
             errors = () if valid else ("native plan validation failed",)
+            issues = (
+                ()
+                if valid
+                else (
+                    ValidationIssue(
+                        "NATIVE_PLAN_VALIDATION_FAILED",
+                        "native plan validation failed",
+                    ),
+                )
+            )
             return PlanValidation(
                 valid,
                 resolved.snapshot.revision,
                 resolved.placements,
                 warnings,
                 errors,
+                issues,
             )
         self._validate_fallback(resolved)
         return PlanValidation(
@@ -1043,7 +1495,12 @@ class LiveProject:
             ValueError,
         ) as error:
             revision = self._snapshot.revision if self._snapshot is not None else 0
-            return PlanValidation(False, revision, errors=(str(error),))
+            return PlanValidation(
+                False,
+                revision,
+                errors=(str(error),),
+                issues=(_validation_issue(error),),
+            )
 
     def _validate_fallback(self, resolved: _ResolvedPlan) -> None:
         operations = {value["op"] for value in resolved.wire_commands}
@@ -1086,7 +1543,12 @@ class LiveProject:
             "the running plugin cannot apply this mixed EditPlan"
         )
 
-    def apply(self, plan: EditPlan) -> PlanResult:
+    def apply(
+        self,
+        plan: EditPlan,
+        *,
+        operation_id: str | None = None,
+    ) -> PlanResult:
         resolved = self._resolve(plan)
         try:
             validation = self._validate_resolved(resolved)
@@ -1098,6 +1560,7 @@ class LiveProject:
                 resolved.snapshot.revision,
                 resolved.placements,
                 errors=(str(error),),
+                issues=(_validation_issue(error),),
             )
         except (
             ConnectionError,
@@ -1109,6 +1572,7 @@ class LiveProject:
                 resolved.snapshot.revision,
                 resolved.placements,
                 errors=(str(error),),
+                issues=(_validation_issue(error),),
             )
         if not validation.valid:
             raise PlanValidationError(validation)
@@ -1121,10 +1585,17 @@ class LiveProject:
         raw: Mapping[str, Any]
         try:
             if "edit.plan.apply" in self._methods:
-                raw = self.client.apply_edit_plan(
-                    expected_revision=before.revision,
-                    commands=resolved.wire_commands,
-                )
+                if operation_id is None:
+                    raw = self.client.apply_edit_plan(
+                        expected_revision=before.revision,
+                        commands=resolved.wire_commands,
+                    )
+                else:
+                    raw = self.client.apply_edit_plan(
+                        expected_revision=before.revision,
+                        commands=resolved.wire_commands,
+                        operation_id=operation_id,
+                    )
             else:
                 raw = self._apply_fallback(resolved)
         except BridgeRemoteError as error:
@@ -1619,15 +2090,17 @@ class LiveProject:
         at: FramePosition = None,
         layer: int | None = None,
         duration: int | None = None,
-        x: float | None = None,
-        y: float | None = None,
-        z: float | None = None,
-        scale: float | None = None,
-        rotation: float | None = None,
-        rotation_x: float | None = None,
-        rotation_y: float | None = None,
-        rotation_z: float | None = None,
-        opacity: float | None = None,
+        x: TransformValue | None = None,
+        y: TransformValue | None = None,
+        z: TransformValue | None = None,
+        scale: TransformValue | None = None,
+        rotation: TransformValue | None = None,
+        rotation_x: TransformValue | None = None,
+        rotation_y: TransformValue | None = None,
+        rotation_z: TransformValue | None = None,
+        opacity: TransformValue | None = None,
+        fit: Literal["contain", "cover"] | None = None,
+        apply_exif_orientation: bool = False,
         effects: Sequence[EffectDefinition] | None = None,
     ) -> EditObjectGroup:
         return self._single_group(
@@ -1647,6 +2120,8 @@ class LiveProject:
                 rotation_y=rotation_y,
                 rotation_z=rotation_z,
                 opacity=opacity,
+                fit=fit,
+                apply_exif_orientation=apply_exif_orientation,
                 effects=list(effects) if effects is not None else None,
             )
         )
@@ -1660,15 +2135,17 @@ class LiveProject:
         at: FramePosition,
         layer: int | None,
         duration: int | None,
-        x: float | None,
-        y: float | None,
-        z: float | None,
-        scale: float | None,
-        rotation: float | None,
-        rotation_x: float | None,
-        rotation_y: float | None,
-        rotation_z: float | None,
-        opacity: float | None,
+        x: TransformValue | None,
+        y: TransformValue | None,
+        z: TransformValue | None,
+        scale: TransformValue | None,
+        rotation: TransformValue | None,
+        rotation_x: TransformValue | None,
+        rotation_y: TransformValue | None,
+        rotation_z: TransformValue | None,
+        opacity: TransformValue | None,
+        fit: Literal["contain", "cover"] | None,
+        apply_exif_orientation: bool,
         effects: Sequence[EffectDefinition] | None,
     ) -> EditObjectGroup:
         return self.add_media(
@@ -1687,6 +2164,8 @@ class LiveProject:
             rotation_y=rotation_y,
             rotation_z=rotation_z,
             opacity=opacity,
+            fit=fit,
+            apply_exif_orientation=apply_exif_orientation,
             effects=effects,
         )
 
@@ -1698,15 +2177,17 @@ class LiveProject:
         at: FramePosition = None,
         layer: int | None = None,
         duration: int | None = None,
-        x: float | None = None,
-        y: float | None = None,
-        z: float | None = None,
-        scale: float | None = None,
-        rotation: float | None = None,
-        rotation_x: float | None = None,
-        rotation_y: float | None = None,
-        rotation_z: float | None = None,
-        opacity: float | None = None,
+        x: TransformValue | None = None,
+        y: TransformValue | None = None,
+        z: TransformValue | None = None,
+        scale: TransformValue | None = None,
+        rotation: TransformValue | None = None,
+        rotation_x: TransformValue | None = None,
+        rotation_y: TransformValue | None = None,
+        rotation_z: TransformValue | None = None,
+        opacity: TransformValue | None = None,
+        fit: Literal["contain", "cover"] | None = None,
+        apply_exif_orientation: bool = False,
         effects: Sequence[EffectDefinition] | None = None,
     ) -> EditObjectGroup:
         return self._add_typed_media(
@@ -1725,6 +2206,8 @@ class LiveProject:
             rotation_y=rotation_y,
             rotation_z=rotation_z,
             opacity=opacity,
+            fit=fit,
+            apply_exif_orientation=apply_exif_orientation,
             effects=effects,
         )
 
@@ -1736,15 +2219,16 @@ class LiveProject:
         at: FramePosition = None,
         layer: int | None = None,
         duration: int | None = None,
-        x: float | None = None,
-        y: float | None = None,
-        z: float | None = None,
-        scale: float | None = None,
-        rotation: float | None = None,
-        rotation_x: float | None = None,
-        rotation_y: float | None = None,
-        rotation_z: float | None = None,
-        opacity: float | None = None,
+        x: TransformValue | None = None,
+        y: TransformValue | None = None,
+        z: TransformValue | None = None,
+        scale: TransformValue | None = None,
+        rotation: TransformValue | None = None,
+        rotation_x: TransformValue | None = None,
+        rotation_y: TransformValue | None = None,
+        rotation_z: TransformValue | None = None,
+        opacity: TransformValue | None = None,
+        fit: Literal["contain", "cover"] | None = None,
         effects: Sequence[EffectDefinition] | None = None,
     ) -> EditObjectGroup:
         return self._add_typed_media(
@@ -1763,6 +2247,8 @@ class LiveProject:
             rotation_y=rotation_y,
             rotation_z=rotation_z,
             opacity=opacity,
+            fit=fit,
+            apply_exif_orientation=False,
             effects=effects,
         )
 
@@ -1774,15 +2260,6 @@ class LiveProject:
         at: FramePosition = None,
         layer: int | None = None,
         duration: int | None = None,
-        x: float | None = None,
-        y: float | None = None,
-        z: float | None = None,
-        scale: float | None = None,
-        rotation: float | None = None,
-        rotation_x: float | None = None,
-        rotation_y: float | None = None,
-        rotation_z: float | None = None,
-        opacity: float | None = None,
         effects: Sequence[EffectDefinition] | None = None,
     ) -> EditObjectGroup:
         return self._add_typed_media(
@@ -1792,15 +2269,17 @@ class LiveProject:
             at=at,
             layer=layer,
             duration=duration,
-            x=x,
-            y=y,
-            z=z,
-            scale=scale,
-            rotation=rotation,
-            rotation_x=rotation_x,
-            rotation_y=rotation_y,
-            rotation_z=rotation_z,
-            opacity=opacity,
+            x=None,
+            y=None,
+            z=None,
+            scale=None,
+            rotation=None,
+            rotation_x=None,
+            rotation_y=None,
+            rotation_z=None,
+            opacity=None,
+            fit=None,
+            apply_exif_orientation=False,
             effects=effects,
         )
 
@@ -1856,15 +2335,15 @@ class LiveProject:
         key: str | None = None,
         text: str | None = None,
         name: str | None = None,
-        x: float | None = None,
-        y: float | None = None,
-        z: float | None = None,
-        scale: float | None = None,
-        rotation: float | None = None,
-        rotation_x: float | None = None,
-        rotation_y: float | None = None,
-        rotation_z: float | None = None,
-        opacity: float | None = None,
+        x: TransformValue | None = None,
+        y: TransformValue | None = None,
+        z: TransformValue | None = None,
+        scale: TransformValue | None = None,
+        rotation: TransformValue | None = None,
+        rotation_x: TransformValue | None = None,
+        rotation_y: TransformValue | None = None,
+        rotation_z: TransformValue | None = None,
+        opacity: TransformValue | None = None,
     ) -> EditObjectGroup:
         return self._single_group(
             EditPlan().update(
@@ -1902,8 +2381,16 @@ class LiveProject:
         effect: str,
         *,
         values: Mapping[str, object] | None = None,
+        enabled: bool = True,
     ) -> EditObjectGroup:
-        return self._single_group(EditPlan().add_effect(target, effect, values=values))
+        return self._single_group(
+            EditPlan().add_effect(
+                target,
+                effect,
+                values=values,
+                enabled=enabled,
+            )
+        )
 
     def available_effect_profiles(self) -> tuple[str, ...]:
         """Return curated profiles whose exact schema exists in this host."""

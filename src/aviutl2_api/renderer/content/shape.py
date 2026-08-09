@@ -243,20 +243,27 @@ class ShapeRenderer(ContentRenderer):
         radius_y = height // 2
 
         # Generate polygon vertices
-        pts = []
+        points: list[list[int]] = []
         for i in range(sides):
             angle = 2 * math.pi * i / sides - math.pi / 2  # Start from top
             x = int(cx + radius_x * math.cos(angle))
             y = int(cy + radius_y * math.sin(angle))
-            pts.append([x, y])
+            points.append([x, y])
 
-        pts = np.array(pts, np.int32)
+        points_array = np.asarray(points, dtype=np.int32)
 
         if filled:
-            cv2.fillPoly(img, [pts], (r, g, b, 255), cv2.LINE_AA)
+            cv2.fillPoly(img, [points_array], (r, g, b, 255), cv2.LINE_AA)
         else:
             thickness = max(1, int(line_width / 100))
-            cv2.polylines(img, [pts], True, (r, g, b, 255), thickness, cv2.LINE_AA)
+            cv2.polylines(
+                img,
+                [points_array],
+                True,
+                (r, g, b, 255),
+                thickness,
+                cv2.LINE_AA,
+            )
 
         return img
 
@@ -285,7 +292,7 @@ class ShapeRenderer(ContentRenderer):
         inner_r_y = outer_r_y * 0.4
 
         # Generate star vertices (alternating outer and inner)
-        pts = []
+        points = []
         for i in range(10):
             angle = math.pi * i / 5 - math.pi / 2  # Start from top
             if i % 2 == 0:
@@ -294,15 +301,22 @@ class ShapeRenderer(ContentRenderer):
             else:
                 x = int(cx + inner_r_x * math.cos(angle))
                 y = int(cy + inner_r_y * math.sin(angle))
-            pts.append([x, y])
+            points.append([x, y])
 
-        pts = np.array(pts, np.int32)
+        points_array = np.asarray(points, dtype=np.int32)
 
         if filled:
-            cv2.fillPoly(img, [pts], (r, g, b, 255), cv2.LINE_AA)
+            cv2.fillPoly(img, [points_array], (r, g, b, 255), cv2.LINE_AA)
         else:
             thickness = max(1, int(line_width / 100))
-            cv2.polylines(img, [pts], True, (r, g, b, 255), thickness, cv2.LINE_AA)
+            cv2.polylines(
+                img,
+                [points_array],
+                True,
+                (r, g, b, 255),
+                thickness,
+                cv2.LINE_AA,
+            )
 
         return img
 
@@ -327,7 +341,7 @@ class ShapeRenderer(ContentRenderer):
         cy = canvas_h // 2
 
         # Generate heart shape using parametric equations
-        pts = []
+        points = []
         for t in range(0, 360, 5):
             t_rad = math.radians(t)
             x = 16 * (math.sin(t_rad) ** 3)
@@ -341,15 +355,22 @@ class ShapeRenderer(ContentRenderer):
             # Scale to fit
             x = int(cx + x * width / 40)
             y = int(cy + y * height / 40)
-            pts.append([x, y])
+            points.append([x, y])
 
-        pts = np.array(pts, np.int32)
+        points_array = np.asarray(points, dtype=np.int32)
 
         if filled:
-            cv2.fillPoly(img, [pts], (r, g, b, 255), cv2.LINE_AA)
+            cv2.fillPoly(img, [points_array], (r, g, b, 255), cv2.LINE_AA)
         else:
             thickness = max(1, int(line_width / 100))
-            cv2.polylines(img, [pts], True, (r, g, b, 255), thickness, cv2.LINE_AA)
+            cv2.polylines(
+                img,
+                [points_array],
+                True,
+                (r, g, b, 255),
+                thickness,
+                cv2.LINE_AA,
+            )
 
         return img
 

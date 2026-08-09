@@ -63,14 +63,13 @@ callback cannot deadlock the main window.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe -m ruff check <changed-python-files...>
-.\.venv\Scripts\python.exe -m mypy --strict <changed-typed-modules...>
+.\.venv\Scripts\python.exe -m ruff format --check src tests examples
+.\.venv\Scripts\python.exe -m ruff check src tests examples
+.\.venv\Scripts\python.exe -m mypy --strict src/aviutl2_api
 ```
 
-The repository still contains legacy CLI/preview-renderer lint debt outside the
-typed Live Bridge modules. Do not describe a full-repository ruff/mypy run as a
-release gate until that baseline is removed; every changed Python file must
-nevertheless pass the configured checks.
+0.9.6 removes the legacy CLI/preview-renderer lint and strict-type baseline.
+Do not add broad ignores or exclude those modules from the release gate.
 
 To run the opt-in cross-language named-pipe test:
 
@@ -139,6 +138,22 @@ the destructive delete probe against a project that has not been saved separatel
 
 Actual AviUtl2 load/lifecycle verification cannot be replaced by the SDK-free native
 tests and must be recorded before distributing the plugin.
+
+For the 0.9.6 Local/Live synchronization gate, open the same source project in
+AviUtl2, enable the target window, and run:
+
+```powershell
+.\.venv\Scripts\python.exe tests/manual/sync_096_host_acceptance.py `
+  project.aup2 `
+  --pid <PID> `
+  --video-with-audio short-video.mp4
+```
+
+The script applies one text/shape/A/V Effect plan, records native PNG and PCM,
+creates a new checkpoint, and waits for one manual Ctrl+Z. It must report
+`diverged` after Undo with no Live-only/changed objects. Finally open the emitted
+`sync-checkpoint.aup2` manually and compare its image, audio, A/V group, and Effect
+stack with the pre-Undo Live result. The original source must remain unchanged.
 
 ## SDK baseline
 

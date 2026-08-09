@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -20,10 +21,12 @@ namespace {
 
 COMMON_PLUGIN_TABLE g_plugin_table{
     L"AviUtl2 Live Bridge",
-    L"AviUtl2 Live Bridge version 0.9.5",
+    L"AviUtl2 Live Bridge version 0.9.6",
 };
 
-std::mutex g_state_mutex;
+// Project-load registration may synchronously invoke its initial callback
+// while RegisterPlugin is still publishing g_state.
+std::recursive_mutex g_state_mutex;
 std::unique_ptr<aviutl2::live::BridgeState> g_state;
 std::atomic<HWND> g_start_window = nullptr;
 std::atomic_bool g_external_api_allowed = false;
@@ -48,6 +51,38 @@ char kObjectUpdatedEvent[] = "object_updated";
 char kEditFrameChangedEvent[] = "edit_frame_changed";
 char kEditSceneChangedEvent[] = "edit_scene_changed";
 char kFocusObjectChangedEvent[] = "focus_object_changed";
+
+void record_project_lifecycle(
+    PROJECT_FILE* project,
+    const std::string_view event_type) noexcept {
+    try {
+        std::wstring_view project_file_path;
+        // PROJECT_FILE is callback-scoped. Copy its path now, but do not
+        // enter an edit/read section or perform any mutation from callbacks.
+        if (project != nullptr &&
+            project->get_project_file_path != nullptr) {
+            const LPCWSTR path = project->get_project_file_path();
+            if (path != nullptr) {
+                project_file_path = path;
+            }
+        }
+        std::scoped_lock lock(g_state_mutex);
+        if (g_state != nullptr &&
+            !g_shutting_down.load(std::memory_order_acquire)) {
+            g_state->record_project_event(event_type, project_file_path);
+        }
+    } catch (...) {
+        // Host lifecycle callbacks must never observe plugin exceptions.
+    }
+}
+
+void project_loaded_callback(PROJECT_FILE* project) noexcept {
+    record_project_lifecycle(project, "project_loaded");
+}
+
+void project_saving_callback(PROJECT_FILE* project) noexcept {
+    record_project_lifecycle(project, "project_saving");
+}
 
 void bridge_event_callback(void* param) noexcept {
     if (param == nullptr ||
@@ -730,6 +765,12 @@ EXTERN_C __declspec(dllexport) void RegisterPlugin(HOST_APP_TABLE* host) {
         auto state =
             std::make_unique<aviutl2::live::BridgeState>(edit_handle);
         g_state = std::move(state);
+        if (host->register_project_load_handler != nullptr) {
+            host->register_project_load_handler(project_loaded_callback);
+        }
+        if (host->register_project_save_handler != nullptr) {
+            host->register_project_save_handler(project_saving_callback);
+        }
         if (host->register_event_listener != nullptr) {
             host->register_event_listener(
                 EVENT_TYPE::UPDATE_OBJECT,

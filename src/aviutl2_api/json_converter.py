@@ -39,10 +39,7 @@ class JsonConverter:
         return json.dumps(data, indent=indent, ensure_ascii=False)
 
     def to_json_file(
-        self,
-        project: Project,
-        file_path: str | Path,
-        indent: int = 2
+        self, project: Project, file_path: str | Path, indent: int = 2
     ) -> None:
         """Write a Project to a JSON file."""
         content = self.to_json(project, indent)
@@ -237,6 +234,7 @@ class JsonConverter:
 
 
 # Convenience functions
+
 
 def to_json(project: Project, indent: int = 2) -> str:
     """Convert a Project to a JSON string."""

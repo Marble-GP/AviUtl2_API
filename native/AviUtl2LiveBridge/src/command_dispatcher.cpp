@@ -1077,6 +1077,10 @@ std::string CommandDispatcher::dispatch(const Request& request) {
                  })},
                 {"height", Json(info.height)},
                 {"layer_max", Json(info.layer_max)},
+                {"project_file_path",
+                 info.project_file_path.empty()
+                     ? Json(nullptr)
+                     : Json(info.project_file_path)},
                 {"sample_rate", Json(info.sample_rate)},
                 {"scene_id", Json(info.scene_id)},
                 {"width", Json(info.width)},
@@ -1303,6 +1307,12 @@ Json CommandDispatcher::capabilities_result() const {
         Json("batch.apply"),
     };
     Json::Object result{
+        {"explicit_plan_sync", Json(true)},
+        {"guarded_checkpoint_save", Json(true)},
+        {"local_project", Json(true)},
+        {"lossless_aup2_document", Json(true)},
+        {"project_lifecycle_notifications", Json(true)},
+        {"project_path_observation", Json(true)},
         {"semantic_effect_profiles", Json(true)},
         {"native_effect_fallback", Json(true)},
         {"edit_plan_create_effect_stack", Json(true)},
@@ -1540,6 +1550,8 @@ Json CommandDispatcher::capabilities_result() const {
              Json("edit_frame_changed"),
              Json("edit_scene_changed"),
              Json("focus_object_changed"),
+             Json("project_loaded"),
+             Json("project_saving"),
          })},
         {"protocol_version", Json(static_cast<std::int64_t>(kProtocolVersion))},
     };

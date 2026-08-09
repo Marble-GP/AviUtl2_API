@@ -9,11 +9,7 @@ from .protocol import ProtocolError
 
 
 def _integer(value: Any, *, minimum: int = 0) -> int:
-    if (
-        not isinstance(value, int)
-        or isinstance(value, bool)
-        or value < minimum
-    ):
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
         raise ProtocolError("Live Bridge returned an invalid layer page")
     return value
 

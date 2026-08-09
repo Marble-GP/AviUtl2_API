@@ -453,7 +453,18 @@ public:
     EditState state = EditState::edit;
     ProjectInfoResult project{
         true,
-        ProjectInfo{7, 1920, 1080, 30000, 1001, 48000, 12, 3, 240, 8},
+        ProjectInfo{
+            7,
+            1920,
+            1080,
+            30000,
+            1001,
+            48000,
+            12,
+            3,
+            240,
+            8,
+            "C:\\Projects\\current.aup2"},
         {},
         {},
         false,
@@ -878,10 +889,18 @@ void test_protocol_and_fixtures() {
                     ->find("media_group_effect_routing")
                     ->as_bool() &&
             capability_result->find("linear_effect_values")->as_bool() &&
+            capability_result->find("local_project")->as_bool() &&
+            capability_result->find("lossless_aup2_document")->as_bool() &&
+            capability_result->find("guarded_checkpoint_save")->as_bool() &&
+            capability_result->find("explicit_plan_sync")->as_bool() &&
+            capability_result->find("project_path_observation")->as_bool() &&
+            capability_result
+                    ->find("project_lifecycle_notifications")
+                    ->as_bool() &&
             capability_result
                     ->find("aup2_effect_manifest_version")
                     ->as_integer() == 2001901,
-        "0.9.5 semantic Effect capabilities should be explicit");
+        "0.9.6 semantic Effect capabilities should be explicit");
 
     const std::string batch_validate_request =
         read_file(fixture_dir / "batch_validate.request.json");
@@ -915,8 +934,11 @@ void test_protocol_and_fixtures() {
         R"({"id":"project","protocol_version":1,"method":"project.get_info","params":{}})");
     const Json project_json = aviutl2::live::parse_json(project);
     require(
-        project_json.find("result")->find("scene_id")->as_integer() == 7,
-        "project info should come from SdkAdapter");
+        project_json.find("result")->find("scene_id")->as_integer() == 7 &&
+            project_json.find("result")
+                    ->find("project_file_path")
+                    ->as_string() == "C:\\Projects\\current.aup2",
+        "project info and observed path should come from SdkAdapter");
 
     const Json catalog_json = aviutl2::live::parse_json(
         dispatcher.handle_payload(
@@ -1367,6 +1389,7 @@ void test_sessions_events_and_audio() {
 
     dispatcher.record_event("object_updated");
     dispatcher.record_event("edit_frame_changed");
+    dispatcher.record_event("project_saving");
     const Json watched = aviutl2::live::parse_json(
         dispatcher.handle_payload(
             77U,
@@ -1382,6 +1405,21 @@ void test_sessions_events_and_audio() {
                     .find("sequence")
                     ->as_integer() == 1,
         "event.watch should filter the sequenced journal");
+    const Json lifecycle = aviutl2::live::parse_json(
+        dispatcher.handle_payload(
+            77U,
+            R"({"id":"lifecycle","protocol_version":1,"method":"event.watch","params":{"after_sequence":0,"timeout_ms":0,"types":["project_saving"]}})"));
+    require(
+        lifecycle.find("result")
+                    ->find("events")
+                    ->as_array()
+                    .size() == 1U &&
+            lifecycle.find("result")
+                    ->find("events")
+                    ->as_array()[0]
+                    .find("type")
+                    ->as_string() == "project_saving",
+        "project lifecycle observations should use the event journal");
     for (std::size_t index = 0U;
          index < aviutl2::live::kMaxEventJournalEntries + 1U;
          ++index) {

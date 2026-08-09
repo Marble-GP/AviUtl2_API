@@ -113,8 +113,7 @@ class Scene:
     def get_objects_at_frame(self, frame: int) -> list[TimelineObject]:
         """Get all objects visible at a specific frame."""
         return [
-            obj for obj in self.objects
-            if obj.frame_start <= frame <= obj.frame_end
+            obj for obj in self.objects if obj.frame_start <= frame <= obj.frame_end
         ]
 
     def get_objects_on_layer(self, layer: int) -> list[TimelineObject]:
@@ -140,7 +139,7 @@ class Scene:
         layer: int,
         frame_start: int,
         frame_end: int,
-        exclude_object_id: int | None = None
+        exclude_object_id: int | None = None,
     ) -> list[TimelineObject]:
         """Find objects that collide with the given layer and frame range.
 
@@ -169,7 +168,7 @@ class Scene:
         frame_start: int,
         frame_end: int,
         exclude_object_id: int | None = None,
-        max_iterations: int = 100
+        max_iterations: int = 100,
     ) -> list[tuple[int, int, int]]:
         """Resolve collisions by pushing colliding objects down to lower layers.
 
@@ -188,7 +187,9 @@ class Scene:
         """
         moved_objects: dict[int, int] = {}  # object_id -> move_count
         movements: list[tuple[int, int, int]] = []  # (object_id, old_layer, new_layer)
-        layers_to_check: set[int] = {target_layer}  # Track layers that need collision checking
+        layers_to_check: set[int] = {
+            target_layer
+        }  # Track layers that need collision checking
         iterations = 0
         recently_moved: set[int] = set()  # Track objects moved in current cascade
 
@@ -225,7 +226,8 @@ class Scene:
                                 o.layer = old_l
                                 break
                     raise RuntimeError(
-                        f"衝突解決に失敗: オブジェクト {obj.object_id} が {move_count} 回移動されました。"
+                        f"衝突解決に失敗: オブジェクト {obj.object_id} が "
+                        f"{move_count} 回移動されました。"
                         "レイヤー配置を見直してください。"
                     )
 
@@ -244,7 +246,9 @@ class Scene:
                     if o.object_id == obj_id:
                         o.layer = old_l
                         break
-            raise RuntimeError(f"衝突解決に失敗: 最大反復回数 {max_iterations} に達しました。")
+            raise RuntimeError(
+                f"衝突解決に失敗: 最大反復回数 {max_iterations} に達しました。"
+            )
 
         return movements
 
@@ -282,20 +286,10 @@ class Project:
 
     @classmethod
     def create_empty(
-        cls,
-        width: int = 1920,
-        height: int = 1080,
-        fps: int = 30,
-        file_path: str = ""
+        cls, width: int = 1920, height: int = 1080, fps: int = 30, file_path: str = ""
     ) -> Project:
         """Create an empty project with default settings."""
         project = cls(file_path=file_path)
-        scene = Scene(
-            scene_id=0,
-            name="Root",
-            width=width,
-            height=height,
-            fps=fps
-        )
+        scene = Scene(scene_id=0, name="Root", width=width, height=height, fps=fps)
         project.add_scene(scene)
         return project

@@ -114,7 +114,7 @@ class FrameBuffer:
         height: int | None = None,
         scale: float | None = None,
         maintain_aspect: bool = True,
-    ) -> tuple["FrameBuffer", list[str]]:
+    ) -> tuple[FrameBuffer, list[str]]:
         """リサイズされたFrameBufferを返す。
 
         Args:
@@ -203,7 +203,9 @@ class FrameBuffer:
         resized = cv2.resize(
             self.data,
             (new_width, new_height),
-            interpolation=cv2.INTER_LANCZOS4 if scale_factor < 1.0 else cv2.INTER_LINEAR,
+            interpolation=cv2.INTER_LANCZOS4
+            if scale_factor < 1.0
+            else cv2.INTER_LINEAR,
         )
 
         return FrameBuffer(width=new_width, height=new_height, data=resized), warnings

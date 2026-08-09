@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from os import PathLike
 from pathlib import Path
@@ -12,6 +12,7 @@ from typing import ClassVar, Literal, Protocol, TypeAlias
 
 PlanSequence = Literal["parallel", "serial"]
 FramePosition = int | Literal["end"] | None
+MediaFit = Literal["contain", "cover"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +290,8 @@ class AddMediaInstruction:
     layer: int | None
     duration: int | None
     transform: Transform
+    fit: MediaFit | None
+    apply_exif_orientation: bool
     effects: tuple[EffectDefinition, ...]
     op: ClassVar[str] = "add_media"
     target: ClassVar[None] = None
@@ -302,6 +305,8 @@ class AddMediaInstruction:
             "layer": self.layer,
             "duration": self.duration,
             "transform": self.transform,
+            "fit": self.fit,
+            "apply_exif_orientation": self.apply_exif_orientation,
             "effects": self.effects,
         }
 
@@ -389,6 +394,20 @@ class AddEffectInstruction:
 
 
 @dataclass(frozen=True, slots=True)
+class ApplyEffectInstruction:
+    """Apply one backend-neutral semantic or explicit native Effect."""
+
+    target: object
+    spec: EffectDefinition
+    key: str | None
+    op: ClassVar[str] = "apply_effect"
+
+    @property
+    def values(self) -> Mapping[str, object]:
+        return {"spec": self.spec}
+
+
+@dataclass(frozen=True, slots=True)
 class SetEffectEnabledInstruction:
     target: object
     selector: str
@@ -399,6 +418,18 @@ class SetEffectEnabledInstruction:
     @property
     def values(self) -> Mapping[str, object]:
         return {"selector": self.selector, "enabled": self.enabled}
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteEffectInstruction:
+    target: object
+    selector: str
+    key: str | None
+    op: ClassVar[str] = "delete_effect"
+
+    @property
+    def values(self) -> Mapping[str, object]:
+        return {"selector": self.selector}
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,6 +448,19 @@ class PlanValidation:
     placements: tuple[PlannedPlacement, ...] = ()
     warnings: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
+    issues: tuple[ValidationIssue, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationIssue:
+    """Machine-readable validation failure for agent recovery."""
+
+    code: str
+    message: str
+    details: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "details", dict(self.details))
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,6 +535,13 @@ class PlanValidationError(ValueError):
     def __init__(self, validation: PlanValidation) -> None:
         super().__init__("edit plan validation failed: " + "; ".join(validation.errors))
         self.validation = validation
+        self.code = "INVALID_EDIT_PLAN"
+        self.details: Mapping[str, object] = {
+            "revision": validation.revision,
+            "issues": tuple(issue.code for issue in validation.issues),
+        }
+        self.retryable = False
+        self.required_action = "fix_plan"
 
 
 class PlanApplyError(RuntimeError):
@@ -499,10 +550,83 @@ class PlanApplyError(RuntimeError):
     def __init__(self, message: str, *, result: PlanResult | None = None) -> None:
         super().__init__(message)
         self.result = result
+        self.code = "PLAN_APPLY_FAILED"
+        self.details: Mapping[str, object] = {
+            "revision": result.revision if result is not None else None,
+            "gui_undo_required": (
+                result.rollback.gui_undo_required if result is not None else None
+            ),
+        }
+        self.retryable = result is None
+        self.required_action = (
+            "gui_undo" if result and result.rollback.gui_undo_required else "refresh"
+        )
 
 
 class ProjectChangedError(RuntimeError):
     """Raised rather than guessing after a GUI or competing-agent edit."""
+
+    code = "PROJECT_CHANGED"
+    retryable = True
+    required_action = "refresh"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.details: Mapping[str, object] = {}
+
+
+class InvalidMediaArgumentsError(ValueError):
+    """A media-specific argument cannot be represented by the selected domain."""
+
+    code = "INVALID_MEDIA_ARGUMENTS"
+    retryable = False
+    required_action = "fix_arguments"
+
+    def __init__(self, message: str, *, arguments: Sequence[str]) -> None:
+        super().__init__(message)
+        self.details: Mapping[str, object] = {"arguments": tuple(arguments)}
+
+
+class PlacementConflictError(ValueError):
+    """An explicit timeline placement overlaps one or more objects."""
+
+    code = "TIMELINE_PLACEMENT_CONFLICT"
+    retryable = False
+    required_action = "choose_free_range"
+
+    def __init__(
+        self,
+        *,
+        layer: int,
+        frame_start: int,
+        frame_end: int,
+        conflicting_object_ids: tuple[str, ...],
+        suggested_layer: int | None,
+    ) -> None:
+        suggestion = (
+            f"; try layer={suggested_layer}" if suggested_layer is not None else ""
+        )
+        conflicts = ", ".join(conflicting_object_ids) or "unknown object"
+        super().__init__(
+            "requested timeline placement is occupied: "
+            f"layer {layer} frames {frame_start}..{frame_end} overlap "
+            f"{conflicts}{suggestion}"
+        )
+        self.layer = layer
+        self.frame_start = frame_start
+        self.frame_end = frame_end
+        self.conflicting_object_ids = conflicting_object_ids
+        self.suggested_layer = suggested_layer
+
+    @property
+    def details(self) -> Mapping[str, object]:
+        return {
+            "layer": self.layer,
+            "frame_start": self.frame_start,
+            "frame_end": self.frame_end,
+            "conflicting_object_ids": self.conflicting_object_ids,
+            "suggested_layer": self.suggested_layer,
+        }
 
 
 class EditPlan:
@@ -620,19 +744,51 @@ class EditPlan:
         at: FramePosition = None,
         layer: int | None = None,
         duration: int | None = None,
-        x: float | None = None,
-        y: float | None = None,
-        z: float | None = None,
-        scale: float | None = None,
-        rotation: float | None = None,
-        rotation_x: float | None = None,
-        rotation_y: float | None = None,
-        rotation_z: float | None = None,
-        opacity: float | None = None,
+        x: TransformValue | None = None,
+        y: TransformValue | None = None,
+        z: TransformValue | None = None,
+        scale: TransformValue | None = None,
+        rotation: TransformValue | None = None,
+        rotation_x: TransformValue | None = None,
+        rotation_y: TransformValue | None = None,
+        rotation_z: TransformValue | None = None,
+        opacity: TransformValue | None = None,
+        fit: MediaFit | None = None,
+        apply_exif_orientation: bool = False,
         effects: tuple[EffectDefinition, ...] | list[EffectDefinition] | None = None,
     ) -> EditPlan:
         if kind not in {"auto", "image", "video", "audio"}:
             raise ValueError("unsupported media kind")
+        if fit not in {None, "contain", "cover"}:
+            raise ValueError("fit must be 'contain', 'cover', or None")
+        if fit is not None and scale is not None:
+            raise ValueError("fit and scale cannot be supplied together")
+        if not isinstance(apply_exif_orientation, bool):
+            raise TypeError("apply_exif_orientation must be bool")
+        transform_arguments = {
+            "x": x,
+            "y": y,
+            "z": z,
+            "scale": scale,
+            "rotation": rotation,
+            "rotation_x": rotation_x,
+            "rotation_y": rotation_y,
+            "rotation_z": rotation_z,
+            "opacity": opacity,
+        }
+        if kind == "audio":
+            invalid = [
+                name for name, value in transform_arguments.items() if value is not None
+            ]
+            if fit is not None:
+                invalid.append("fit")
+            if apply_exif_orientation:
+                invalid.append("apply_exif_orientation")
+            if invalid:
+                raise InvalidMediaArgumentsError(
+                    "audio media does not support visual transform arguments",
+                    arguments=invalid,
+                )
         self._placement(at=at, layer=layer, duration=duration)
         return self._append(
             AddMediaInstruction(
@@ -653,6 +809,8 @@ class EditPlan:
                     rotation_z=rotation_z,
                     opacity=opacity,
                 ),
+                fit=fit,
+                apply_exif_orientation=apply_exif_orientation,
                 effects=self._effect_stack(effects),
             )
         )
@@ -666,15 +824,17 @@ class EditPlan:
         at: FramePosition,
         layer: int | None,
         duration: int | None,
-        x: float | None,
-        y: float | None,
-        z: float | None,
-        scale: float | None,
-        rotation: float | None,
-        rotation_x: float | None,
-        rotation_y: float | None,
-        rotation_z: float | None,
-        opacity: float | None,
+        x: TransformValue | None,
+        y: TransformValue | None,
+        z: TransformValue | None,
+        scale: TransformValue | None,
+        rotation: TransformValue | None,
+        rotation_x: TransformValue | None,
+        rotation_y: TransformValue | None,
+        rotation_z: TransformValue | None,
+        opacity: TransformValue | None,
+        fit: MediaFit | None,
+        apply_exif_orientation: bool,
         effects: tuple[EffectDefinition, ...] | list[EffectDefinition] | None,
     ) -> EditPlan:
         return self.add_media(
@@ -693,6 +853,8 @@ class EditPlan:
             rotation_y=rotation_y,
             rotation_z=rotation_z,
             opacity=opacity,
+            fit=fit,
+            apply_exif_orientation=apply_exif_orientation,
             effects=effects,
         )
 
@@ -704,15 +866,17 @@ class EditPlan:
         at: FramePosition = None,
         layer: int | None = None,
         duration: int | None = None,
-        x: float | None = None,
-        y: float | None = None,
-        z: float | None = None,
-        scale: float | None = None,
-        rotation: float | None = None,
-        rotation_x: float | None = None,
-        rotation_y: float | None = None,
-        rotation_z: float | None = None,
-        opacity: float | None = None,
+        x: TransformValue | None = None,
+        y: TransformValue | None = None,
+        z: TransformValue | None = None,
+        scale: TransformValue | None = None,
+        rotation: TransformValue | None = None,
+        rotation_x: TransformValue | None = None,
+        rotation_y: TransformValue | None = None,
+        rotation_z: TransformValue | None = None,
+        opacity: TransformValue | None = None,
+        fit: MediaFit | None = None,
+        apply_exif_orientation: bool = False,
         effects: tuple[EffectDefinition, ...] | list[EffectDefinition] | None = None,
     ) -> EditPlan:
         return self._add_typed_media(
@@ -731,6 +895,8 @@ class EditPlan:
             rotation_y=rotation_y,
             rotation_z=rotation_z,
             opacity=opacity,
+            fit=fit,
+            apply_exif_orientation=apply_exif_orientation,
             effects=effects,
         )
 
@@ -742,15 +908,16 @@ class EditPlan:
         at: FramePosition = None,
         layer: int | None = None,
         duration: int | None = None,
-        x: float | None = None,
-        y: float | None = None,
-        z: float | None = None,
-        scale: float | None = None,
-        rotation: float | None = None,
-        rotation_x: float | None = None,
-        rotation_y: float | None = None,
-        rotation_z: float | None = None,
-        opacity: float | None = None,
+        x: TransformValue | None = None,
+        y: TransformValue | None = None,
+        z: TransformValue | None = None,
+        scale: TransformValue | None = None,
+        rotation: TransformValue | None = None,
+        rotation_x: TransformValue | None = None,
+        rotation_y: TransformValue | None = None,
+        rotation_z: TransformValue | None = None,
+        opacity: TransformValue | None = None,
+        fit: MediaFit | None = None,
         effects: tuple[EffectDefinition, ...] | list[EffectDefinition] | None = None,
     ) -> EditPlan:
         return self._add_typed_media(
@@ -769,6 +936,8 @@ class EditPlan:
             rotation_y=rotation_y,
             rotation_z=rotation_z,
             opacity=opacity,
+            fit=fit,
+            apply_exif_orientation=False,
             effects=effects,
         )
 
@@ -780,15 +949,6 @@ class EditPlan:
         at: FramePosition = None,
         layer: int | None = None,
         duration: int | None = None,
-        x: float | None = None,
-        y: float | None = None,
-        z: float | None = None,
-        scale: float | None = None,
-        rotation: float | None = None,
-        rotation_x: float | None = None,
-        rotation_y: float | None = None,
-        rotation_z: float | None = None,
-        opacity: float | None = None,
         effects: tuple[EffectDefinition, ...] | list[EffectDefinition] | None = None,
     ) -> EditPlan:
         return self._add_typed_media(
@@ -798,15 +958,17 @@ class EditPlan:
             at=at,
             layer=layer,
             duration=duration,
-            x=x,
-            y=y,
-            z=z,
-            scale=scale,
-            rotation=rotation,
-            rotation_x=rotation_x,
-            rotation_y=rotation_y,
-            rotation_z=rotation_z,
-            opacity=opacity,
+            x=None,
+            y=None,
+            z=None,
+            scale=None,
+            rotation=None,
+            rotation_x=None,
+            rotation_y=None,
+            rotation_z=None,
+            opacity=None,
+            fit=None,
+            apply_exif_orientation=False,
             effects=effects,
         )
 
@@ -867,15 +1029,15 @@ class EditPlan:
         key: str | None = None,
         text: str | None = None,
         name: str | None = None,
-        x: float | None = None,
-        y: float | None = None,
-        z: float | None = None,
-        scale: float | None = None,
-        rotation: float | None = None,
-        rotation_x: float | None = None,
-        rotation_y: float | None = None,
-        rotation_z: float | None = None,
-        opacity: float | None = None,
+        x: TransformValue | None = None,
+        y: TransformValue | None = None,
+        z: TransformValue | None = None,
+        scale: TransformValue | None = None,
+        rotation: TransformValue | None = None,
+        rotation_x: TransformValue | None = None,
+        rotation_y: TransformValue | None = None,
+        rotation_z: TransformValue | None = None,
+        opacity: TransformValue | None = None,
     ) -> EditPlan:
         transform = Transform(
             x=x,
@@ -945,6 +1107,19 @@ class EditPlan:
             )
         )
 
+    def apply_effect(
+        self,
+        target: object,
+        spec: EffectDefinition,
+        *,
+        key: str | None = None,
+    ) -> EditPlan:
+        """Append one semantic/native Effect using the shared profile schema."""
+
+        if not isinstance(spec, (EffectSpec, NativeEffectSpec)):
+            raise TypeError("spec must be EffectSpec or NativeEffectSpec")
+        return self._append(ApplyEffectInstruction(target, spec, key))
+
     def set_effect_enabled(
         self,
         target: object,
@@ -964,6 +1139,17 @@ class EditPlan:
             )
         )
 
+    def delete_effect(
+        self,
+        target: object,
+        selector: str,
+        *,
+        key: str | None = None,
+    ) -> EditPlan:
+        if not selector:
+            raise ValueError("an effect selector is required")
+        return self._append(DeleteEffectInstruction(target, selector, key))
+
     def _mark_consumed(self) -> None:
         self._consumed = True
 
@@ -973,8 +1159,10 @@ __all__ = [
     "AddMediaInstruction",
     "AddShapeInstruction",
     "AddTextInstruction",
+    "ApplyEffectInstruction",
     "AppliedEffect",
     "DeleteObjectInstruction",
+    "DeleteEffectInstruction",
     "EFFECT_PROFILES",
     "EditCommand",
     "EffectDefinition",
@@ -985,7 +1173,9 @@ __all__ = [
     "EditInstruction",
     "EditPlan",
     "FramePosition",
+    "InvalidMediaArgumentsError",
     "LinearMotion",
+    "MediaFit",
     "MoveObjectInstruction",
     "NativeEffectSpec",
     "ObjectGroup",
@@ -996,6 +1186,7 @@ __all__ = [
     "PlanSequence",
     "PlanValidation",
     "PlanValidationError",
+    "PlacementConflictError",
     "PlannedPlacement",
     "ProjectChangedError",
     "RollbackReceipt",
@@ -1003,6 +1194,7 @@ __all__ = [
     "Transform",
     "TransformValue",
     "UpdateObjectInstruction",
+    "ValidationIssue",
     "linear",
     "effect",
     "native_effect",

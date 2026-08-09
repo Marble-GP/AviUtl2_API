@@ -9,11 +9,7 @@ from .protocol import ProtocolError
 
 
 def _integer(value: Any, *, minimum: int = 0) -> int:
-    if (
-        not isinstance(value, int)
-        or isinstance(value, bool)
-        or value < minimum
-    ):
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
         raise ProtocolError("Live Bridge returned an invalid effect catalog")
     return value
 
@@ -127,16 +123,10 @@ class EffectCatalogPage:
                 )
             )
         ):
-            raise ProtocolError(
-                "Live Bridge returned an invalid effect catalog page"
-            )
-        effects = tuple(
-            CatalogEffect.from_wire(effect) for effect in effects_value
-        )
+            raise ProtocolError("Live Bridge returned an invalid effect catalog page")
+        effects = tuple(CatalogEffect.from_wire(effect) for effect in effects_value)
         if next_start_value is None and start + len(effects) < total:
-            raise ProtocolError(
-                "Live Bridge returned an invalid effect catalog page"
-            )
+            raise ProtocolError("Live Bridge returned an invalid effect catalog page")
         return cls(
             start=start,
             total=total,

@@ -103,10 +103,7 @@ class CreatedMediaObject:
             or not _integer(frame_start)
             or not _integer(frame_end)
             or not isinstance(snapshot_required, bool)
-            or (
-                revision is not None
-                and not _integer(revision)
-            )
+            or (revision is not None and not _integer(revision))
             or not isinstance(created_objects, list)
             or not isinstance(undo_grouped, bool)
             or not isinstance(warnings, list)
@@ -122,9 +119,7 @@ class CreatedMediaObject:
         objects: list[SnapshotObject] = []
         if created_objects:
             if revision is None or revision <= 0:
-                raise ProtocolError(
-                    "Live Bridge omitted the created-object revision"
-                )
+                raise ProtocolError("Live Bridge omitted the created-object revision")
             for value in created_objects:
                 if not isinstance(value, dict):
                     raise ProtocolError(
@@ -142,10 +137,7 @@ class CreatedMediaObject:
                     or not _integer(object_layer)
                     or not _integer(object_start)
                     or not _integer(object_end)
-                    or (
-                        name is not None
-                        and not isinstance(name, str)
-                    )
+                    or (name is not None and not isinstance(name, str))
                     or not isinstance(api_locked, bool)
                 ):
                     raise ProtocolError(
@@ -195,11 +187,7 @@ class MediaSplitRange:
         layer = value.get("layer")
         frame_start = value.get("frame_start")
         frame_end = value.get("frame_end")
-        if (
-            not _integer(layer)
-            or not _integer(frame_start)
-            or not _integer(frame_end)
-        ):
+        if not _integer(layer) or not _integer(frame_start) or not _integer(frame_end):
             raise ProtocolError("Live Bridge returned an invalid split range")
         assert isinstance(layer, int)
         assert isinstance(frame_start, int)
@@ -235,10 +223,7 @@ class MediaSplit:
             or isinstance(source_position.get("right"), bool)
             or not isinstance(playback_rate, (int, float))
             or isinstance(playback_rate, bool)
-            or (
-                revision is not None
-                and (not _integer(revision) or revision <= 0)
-            )
+            or (revision is not None and (not _integer(revision) or revision <= 0))
             or not isinstance(snapshot_required, bool)
         ):
             raise ProtocolError("Live Bridge returned an invalid media split")
@@ -295,10 +280,7 @@ class MediaInventoryItem:
             any(not isinstance(value.get(name), str) for name in string_fields)
             or any(not isinstance(value.get(name), bool) for name in bool_fields)
             or not _integer(duplicate_count)
-            or (
-                probe_error is not None
-                and not isinstance(probe_error, str)
-            )
+            or (probe_error is not None and not isinstance(probe_error, str))
         ):
             raise ProtocolError("Live Bridge returned an invalid media item")
         assert isinstance(duplicate_count, int)
@@ -346,18 +328,14 @@ class MediaInventory:
             or not _integer(file_item_count)
             or file_item_count != len(files)
         ):
-            raise ProtocolError(
-                "Live Bridge returned an invalid media inventory"
-            )
+            raise ProtocolError("Live Bridge returned an invalid media inventory")
         assert isinstance(revision, int)
         assert isinstance(scene_id, int)
         assert isinstance(unique_count, int)
         assert isinstance(missing_count, int)
         assert isinstance(unreadable_count, int)
         if revision <= 0:
-            raise ProtocolError(
-                "Live Bridge returned an invalid media inventory"
-            )
+            raise ProtocolError("Live Bridge returned an invalid media inventory")
         parsed = tuple(MediaInventoryItem.from_wire(value) for value in files)
         return cls(
             revision=revision,
@@ -389,18 +367,13 @@ class MediaRelinkReceipt:
         if (
             not _integer(affected)
             or not _integer(matched)
-            or (
-                revision is not None
-                and not _integer(revision)
-            )
+            or (revision is not None and not _integer(revision))
             or not isinstance(undo_grouped, bool)
             or not isinstance(snapshot_required, bool)
             or not isinstance(warnings, list)
             or any(not isinstance(value, str) for value in warnings)
         ):
-            raise ProtocolError(
-                "Live Bridge returned an invalid media relink receipt"
-            )
+            raise ProtocolError("Live Bridge returned an invalid media relink receipt")
         assert isinstance(affected, int)
         assert isinstance(matched, int)
         assert revision is None or isinstance(revision, int)

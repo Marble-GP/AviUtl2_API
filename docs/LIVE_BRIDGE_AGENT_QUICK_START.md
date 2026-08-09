@@ -1,238 +1,195 @@
-# AviUtl2 Live Bridge Agent Quick Start
+# AviUtl2 API 0.9.6 エージェント・クイックスタート
 
-対象: plugin / Python package 0.9.5、protocol v1
+AIエージェントが最初に読む日本語ガイドです。最小の英語コンテキストが必要なら
+[Agent API Card](AGENT_API_CARD.md)、全methodの詳細が必要なら
+[完全APIマニュアル](LIVE_BRIDGE_AGENT_API_MANUAL.md)を参照してください。
 
-AIエージェントがプログラムコードから編集するときは、原則として
-`LiveProject`を使う。`LiveClient`はraw item、完全Alias、manual revisionなどが
-必要な場合だけ使用する。
+## 1. Local・Live・Syncの選択
 
-通常の編集タスクでは、まずこの文書だけをコンテキストへ渡す。完全APIマニュアルや
-Wire protocolを最初から読み込まず、ここにない操作・型・errorの詳細が必要になった
-時点で該当箇所だけを参照する。
+| やりたいこと | API | `.aup2`自動保存 |
+|---|---|---|
+| ファイルを安全な作業コピーとして編集 | `LocalProject` | しない |
+| 開いているAviUtl2を編集・native確認 | `LiveProject` | しない |
+| 新しいplanを両方へ明示適用 | `SyncSession` | しない |
 
-0.9.3以前のコードはそのまま`LiveClient`を利用できる。0.9.5への移行では、手動の
-snapshot/revision/operation ID管理を一度に書き換える必要はなく、新しい処理から
-`LiveProject`へ移せばよい。create-time Effect stackを使う場合は、Python packageと
-pluginの両方を0.9.5へ更新する。
+自動同期、暗黙保存、host Open/Save、export、playbackはありません。
 
-## 1. 接続
-
-AviUtl2側で対象ウィンドウの`設定 > 外部API連携設定...`を開き、外部API連携を
-ONにする。複数ウィンドウがある場合はPIDを明示する。
+標準import:
 
 ```python
-from aviutl2_api.live import LiveProject, discover_instances
-
-print([(item.pid, item.plugin_version) for item in discover_instances()])
-
-with LiveProject.connect(pid=46016) as project:
-    print(project.summary())
-```
-
-## 2. 単発編集
-
-```python
-from aviutl2_api.editing import effect
-from aviutl2_api.live import LiveProject
-
-with LiveProject.connect(pid=46016) as project:
-    title = project.add_text(
-        "第一章",
-        duration=90,
-        y=-200,
-        size=80,
-        color="#ffffff",
-        effects=[
-            effect("glow", strength=50, color="#FFD966"),
-            effect("outline", size_px=4, color="#202040"),
-        ],
-    )
-    title = project.update(
-        title.primary,
-        x=120,
-        scale=110,
-        rotation=5,
-        opacity=0.9,
-    )
-    frame = project.render(title.primary.midpoint)
-    png_bytes = frame.png
-```
-
-- `at=None`: AviUtl2 GUIの現在カーソルframe。
-- `layer=None`: Layer 0から探した最初の未ロック・非衝突layer。
-- text/image/shapeの既定duration: 60 frames。
-- video/audioの既定duration: AviUtl2 native media probeの時間をscene FPSへ変換。
-- `scale=100`: 等倍。`opacity`は`0.0..1.0`。
-- `rotation`はZ軸回転のdegree。必要なら`rotation_x/y/z`を明示する。
-- text/shape作成時は`linear(start, end)`をtransform値へ渡すと直線移動になる。
-- render結果はmemory上のPNGであり、projectや画像ファイルを自動保存しない。
-
-画像・動画・音声も同じ形で追加できる。
-
-```python
-from aviutl2_api.editing import linear
-
-image = project.add_image("assets/logo.png", at="end", scale=75)
-video = project.add_video("assets/intro.mp4")
-audio = project.add_audio("assets/bgm.wav", layer=10)
-shape = project.add_shape(
-    "star",
-    width=120,
-    height=120,
-    color="#fff4b8",
-    opacity=0.85,
-    x=linear(900, -900),
-    rotation=linear(0, 360),
+from aviutl2_api import (
+    EditPlan,
+    LiveProject,
+    LocalProject,
+    SyncSession,
+    effect,
+    linear,
 )
 ```
 
-相対素材pathはPython processのcurrent working directoryを基準に絶対pathへ解決
-される。曖昧さを避ける場合は絶対pathを渡す。
-
-## 3. 複数操作を一つにまとめる
+## 2. Local編集とcheckpoint
 
 ```python
-from aviutl2_api.editing import EditPlan, PlanValidationError, effect
-from aviutl2_api.live import LiveProject
+local = LocalProject.load("project.aup2")
 
-plan = EditPlan(sequence="parallel")
-plan.add_video("intro.mp4", key="intro")
-plan.add_shape(
-    "rectangle",
-    key="panel",
+title = local.add_text(
+    "第一章",
     duration=90,
-    width=900,
-    height=160,
     y=-200,
+    size=72,
+    effects=[effect("glow", strength=50)],
 )
+title = local.update(title.primary, x=120, scale=110)
+
+# 元のproject.aup2は変更しない。
+saved = local.checkpoint()  # project.ai-0001.aup2
+print(saved.path)
+```
+
+`add_text()`などの即時methodも内部では1コマンドの`EditPlan`として処理されます。
+元ファイルの置換は、ユーザーが明示的に求めた場合だけ実行してください。
+
+```python
+local.save_source(overwrite=True, backup=True)
+```
+
+引数なしの`save_source()`は書き込まず拒否します。置換時にはload時SHA-256を
+再検査し、既定でbackupを作ります。
+
+## 3. 開いているAviUtl2の編集
+
+AviUtl2の対象ウィンドウで外部API連携をONにします。複数ウィンドウがあり得る
+場合はPIDを必ず指定します。
+
+```python
+with LiveProject.connect(pid=46016) as live:
+    print(live.summary())
+    title = live.add_text("第一章", duration=90, y=-200, size=72)
+    title = live.update(title.primary, x=120)
+    rendered = live.render(title.primary.midpoint)
+    png_bytes = rendered.png
+```
+
+`render()`はAviUtl2 native PNGをmemoryで返します。ファイル保存は
+`rendered.save(path)`を明示した場合だけ行い、既存ファイルは`overwrite=True`なしで
+上書きしません。
+
+object参照はrevision scopedです。mutation前の古い参照を再利用せず、返された
+fresh objectを次の操作に使います。
+
+## 4. 複数操作を一つにまとめる
+
+```python
+plan = EditPlan(sequence="parallel")
+plan.add_video("intro.mp4", key="video", fit="contain")
 plan.add_text(
     "第一章",
     key="title",
     duration=90,
     y=-200,
-    size=80,
-    effects=[effect("glow", strength=50)],
+    effects=[effect("outline", size_px=4, color="#202040")],
+)
+plan.add_shape(
+    "star",
+    key="star",
+    duration=90,
+    x=linear(900, -900),
+    rotation=linear(0, 360),
 )
 
-with LiveProject.connect(pid=46016) as project:
-    validation = project.validate(plan)
+with LiveProject.connect(pid=46016) as live:
+    validation = live.validate(plan)  # dry-runが必要な場合
     if not validation.valid:
-        raise PlanValidationError(validation)
-    result = project.apply(plan)
+        raise RuntimeError(validation.errors)
+    result = live.apply(plan)
+```
+
+成功したplanはsingle-useです。`sequence="parallel"`では省略したframeを共有し、
+`sequence="serial"`では追加順に並べます。`at=None`はcursor、`at="end"`は末尾、
+`layer=None`は最初の空きlayerです。
+
+## 5. LocalとLiveへの明示同期
+
+Liveに開いているsceneと同じ`.aup2`を読み込みます。既存内容が一致しない場合は
+自動統合せず拒否します。
+
+```python
+local = LocalProject.load("project.aup2")
+plan = EditPlan().add_text("第一章", key="title", duration=90, y=-200)
+
+with LiveProject.connect(pid=46016) as live:
+    sync = SyncSession.bind(local, live)
+    status = sync.status()
+    if not status.clean:
+        raise RuntimeError(sync.diff())
+
+    result = sync.apply(plan)  # この呼出しだけが同期trigger
     title = result.objects["title"].primary
-    print(result.revision, result.undo_grouped, result.warnings)
+    png = live.render(title.midpoint).png
+
+# 上ではdisk未保存。必要なら別操作としてcheckpointを作る。
+local.checkpoint()
 ```
 
-- `sequence="parallel"`: `at`省略objectを同じcursor frameへ別layerで配置。
-- `sequence="serial"`: `at`省略objectを追加順に直列配置。
-- `at="end"`: 現在のtimeline末尾へ配置。
-- 同一plan内で先に解決した配置、move、deleteも後続の衝突判定へ反映する。
-- 成功した`EditPlan`はsingle-use。同じinstanceをもう一度`apply()`できない。
-- 通信retryの重複防止はLive Bridge sessionのoperation IDが担当する。
-- 成功は原則1回のGUI Undo単位。ただしSDKに完全rollback機構がないため
-  `result.atomic`は`False`。
+`sync.apply()`は内部でfresh validationを行います。`sync.validate()`はdry-run表示や
+診断が必要な場合だけ先に呼びます。
 
-失敗時の`PlanApplyError.result.rollback`を必ず確認する。
+GUIでCtrl+Zを行うとLive側だけが戻り、Syncは`diverged`になります。Localを推測で
+rollbackしません。ユーザーが保存内容を整理したあと`local.reload()`し、新しい
+`SyncSession`をbindしてください。
+
+## 6. 検索
 
 ```python
-from aviutl2_api.editing import PlanApplyError
-
-try:
-    result = project.apply(plan)
-except PlanApplyError as error:
-    if error.result is not None:
-        print(error.result.rollback)
-        if error.result.rollback.gui_undo_required:
-            print("ユーザーにAviUtl2 GUI Undoを依頼する")
-    raise
+titles = live.find(text_contains="章", overlap=(0, 300))
+title = titles.one()
 ```
 
-## 4. 既存objectを探して編集する
+Local・Live・Syncで次のfilter名を共有します。
 
-```python
-with LiveProject.connect(pid=46016) as project:
-    chapter = project.find(text="第一章").one()
-    chapter = project.update(chapter, text="第1章", x=100).primary
-    chapter = project.move(chapter, at=300, layer=4).primary
+- `name`、`name_contains`
+- `text`、`text_contains`
+- `file`、`file_contains`
+- `effect`、`layer`、`at`、`overlap`、`api_locked`
+
+`one()`は0件・複数件を明示的に拒否します。Localの`.aup2`だけでは安全に判定
+できない`name`と`api_locked`は`LOCAL_QUERY_FILTER_UNAVAILABLE`になります。
+
+## 7. Effect・単位・media
+
+- 座標・サイズ: pixel
+- rotation: degree
+- scale: 100が等倍
+- opacity: 0.0～1.0
+- color: `#RRGGBB`
+- animation: `linear(start, end)`
+- 標準Effect: `effect("glow", strength=50)`
+- exact native schema: `native_effect(name, values)`
+
+image/videoは`fit="contain" | "cover"`に対応します。audioには視覚transform引数が
+ありません。Effect名やitem値を推測せず、Liveでは
+`live.describe_schema("glow")`または`live.available_effect_profiles()`を使います。
+
+## 8. エラーと完了判定
+
+高水準の復旧可能な例外は`code`、`details`、`retryable`、`required_action`を持ちます。
+
+- `SyncValidationError`: planを修正する。
+- `SyncConflictError`: diffを確認し、refresh/rebindする。force mergeしない。
+- `SyncPartialApplyError`: receiptを確認し、許可されていれば`recover()`する。
+- `gui_undo_required=True`: 停止してユーザーへ報告する。
+- `LocalFileChangedError`: hash競合。reloadまたは別pathを選ぶ。
+
+編集完了を報告する前に、代表frame・cut境界・字幕境界をnative PNGで確認します。
+音声編集ではPCMのpeak/RMSも確認します。PNGを生成しただけではVision確認済みとは
+扱いません。
+
+## 9. 実行例
+
+```powershell
+python examples/local_checkpoint.py project.aup2
+python examples/explicit_sync.py project.aup2 --pid 46016 --checkpoint
 ```
 
-`find()`のfilter:
-
-- `name`, `text`, `file`, `effect`
-- `layer`, `at`
-- `api_locked`
-
-`one()`は0件でも複数件でも拒否する。mutation後は返された新しい参照を使い、
-古い`LiveObject`を再利用しない。
-
-## 5. カット・effect・review
-
-```python
-clip = project.find(file="intro.mp4").one()
-parts = project.split(clip, frame=180)
-
-clip = project.find(layer=clip.layer, at=200).one()
-clip = project.trim(
-    clip,
-    frame_start=180,
-    frame_end=359,
-    source_position=6.0,
-).one()
-clip = project.set_duration(clip, 120).one()
-
-from aviutl2_api.editing import effect
-
-applied = project.apply_effect(clip, effect("blur", radius_px=12))
-clip = project.find(file="intro.mp4", at=200).one()
-applied = project.update_effect(
-    clip,
-    applied,
-    effect("blur", radius_px=20),
-)
-```
-
-主要20 profileは自然単位から完全なAviUtl2 item列へ変換され、実機catalogと
-照合される。`available_effect_profiles()`で現在のhostに適用可能なprofileだけを
-確認できる。未知・第三者Effectは`native_effect()`または`project.client`を使い、
-item名・値を明示する。意味や単位は推測されない。
-
-一般textは字幕と推測されず、同時表示されても字幕overlap warningは出ない。
-字幕診断が必要な場合だけ`project.preflight(subtitle_layers=(10, 11),
-subtitle_overlap="warn")`のようにlayerと方針を明示する。
-
-```python
-sheet = project.contact_sheet(frames=(0, 90, 180, 270))
-audio, analysis = project.audio_review(0, 299)
-report = project.preflight(audio_range=(0, 299))
-```
-
-PNG、contact sheet、PCMはmemory返却が既定である。
-
-## 6. Fail closedとescape hatch
-
-- stale revision: `ProjectChangedError`
-- validation失敗: `PlanValidationError`
-- apply/rollback失敗: `PlanApplyError`
-- 旧pluginで混在plan不可: `CapabilityUnavailableError`
-- object/layer/effect lockはAPIから解除しない。
-- project open/save/save-as、export、playback操作は提供しない。
-- 外部連携はウィンドウごとに既定OFF。同一Windowsユーザーのlocal processは、
-  EnableされたPipeへ接続可能であり、session IDは認証tokenではない。
-- API lockはBridge経由のmutationを拒否する機能で、GUI操作、別plugin、process
-  injection、project fileの直接変更、lock対象を別layerから覆う作成までは防がない。
-- lock中もAliasや素材pathは読み取り可能であり、機密情報保護機能ではない。
-
-高水準化されていないsection/ripple/subtitle/raw itemや完全Alias操作は、明示的に
-低水準clientへ降りる。
-
-```python
-with LiveProject.connect(pid=46016) as project:
-    client = project.client
-    snapshot = client.get_snapshot(include_alias=True)
-    # 完全API: LIVE_BRIDGE_AGENT_API_MANUAL.md を参照
-```
-
-完全なPython型、戻り値、error、制約は
-[`LIVE_BRIDGE_AGENT_API_MANUAL.md`](LIVE_BRIDGE_AGENT_API_MANUAL.md)を参照する。
-Named Pipeを直接実装する場合だけ
-[`LIVE_BRIDGE_PROTOCOL.md`](LIVE_BRIDGE_PROTOCOL.md)を参照する。
+低水準の`LiveClient`、完全Alias、raw item、manual revisionが必要な場合だけ
+`live.client`をescape hatchとして使用してください。

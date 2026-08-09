@@ -52,10 +52,7 @@ class ObjectSections:
             )
         if any(section.index != index for index, section in enumerate(parsed)):
             raise ProtocolError("Live Bridge returned non-contiguous sections")
-        if any(
-            left.frame >= right.frame
-            for left, right in zip(parsed, parsed[1:])
-        ):
+        if any(left.frame >= right.frame for left, right in zip(parsed, parsed[1:])):
             raise ProtocolError("Live Bridge returned unordered sections")
         return cls(revision=revision, sections=tuple(parsed))
 

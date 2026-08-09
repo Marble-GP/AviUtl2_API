@@ -13,9 +13,7 @@ def _safe_line(value: str, *, field: str, escape_newlines: bool = False) -> str:
     if "\x00" in value:
         raise ValueError(f"{field} must not contain NUL characters")
     if escape_newlines:
-        return value.replace("\r\n", "\\n").replace("\r", "\\n").replace(
-            "\n", "\\n"
-        )
+        return value.replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n")
     if "\r" in value or "\n" in value:
         raise ValueError(f"{field} must not contain line breaks")
     return value

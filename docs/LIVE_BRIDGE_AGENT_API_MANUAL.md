@@ -1,6 +1,21 @@
 # AviUtl2 Live Bridge エージェント向け完全APIマニュアル
 
-対象バージョン: plugin / Python client 0.9.5
+> Current target: Python package / plugin 0.9.6, additive protocol v1.
+
+## 0.9.6: safe local files and explicit synchronization
+
+0.9.6 adds two opt-in layers without changing `LiveClient` or `LiveProject`:
+
+- `LocalProject` is a stateful in-memory `.aup2` working copy with guarded
+  checkpoint/save operations.
+- `SyncSession` applies one new `EditPlan` to a verified Local/Live pair only
+  when the caller invokes `sync.apply(plan)`.
+- There is no background watcher, automatic push/pull/merge, or implicit save.
+- AviUtl2 Open/Save execution remains unsupported. `project_loaded` and
+  `project_saving` are observations; the latter occurs before save and does not
+  prove success.
+
+対象バージョン: plugin / Python client 0.9.6
 
 Wire protocol: v1 additive
 
@@ -19,8 +34,8 @@ Wire protocol: v1 additive
   transformと映像・音声Effectを振り分ける。
 - `LiveClient`と既存protocol v1 endpointは削除せず、raw操作用に維持する。
 
-移行の最短例は`LIVE_BRIDGE_AGENT_QUICK_START.md`、配布時の変更点と既知制約は
-`releases/v0.9.5.md`を参照する。
+LLMへ渡す最小仕様は`AGENT_API_CARD.md`、移行の最短例は
+`LIVE_BRIDGE_AGENT_QUICK_START.md`、配布時の変更点と既知制約はrelease noteを参照する。
 
 この文書は、Codex、Claude Code、Copilot CLI、Agent ZeroなどのAIエージェントが、
 ユーザーの開いているAviUtl2プロジェクトをLive Bridge経由で安全に編集するための
@@ -309,10 +324,41 @@ scene-wide lockではない。エージェントはロック対象を映像上�
 
 ## 5. 推奨高水準workflow
 
+### 5.0 backendを選ぶ
+
+標準importはパッケージルートへ統一されている。
+
+```python
+from aviutl2_api import (
+    EditPlan,
+    LiveProject,
+    LocalProject,
+    SyncSession,
+    effect,
+    linear,
+    native_effect,
+)
+```
+
+- `.aup2`をmemory上で安全に編集して別checkpointを作る: `LocalProject`
+- ユーザーが開いているAviUtl2だけを編集・native reviewする: `LiveProject`
+- 新しい同一`EditPlan`をLocal memoryとLiveへ明示適用する: `SyncSession`
+
+いずれも`.aup2`を暗黙に保存しない。LocalにもLiveと同じ
+`add_text/image/video/audio/media/shape()`、`update()`、`move()`、`delete()`、
+Effect即時methodがあり、内部では1 commandの`EditPlan`へ正規化される。
+
+```python
+local = LocalProject.load("project.aup2")
+title = local.add_text("第一章", duration=90, y=-200)
+title = local.update(title.primary, x=120)
+local.checkpoint()
+```
+
 ### 5.1 `LiveProject`: 標準入口
 
 ```python
-from aviutl2_api.live import LiveProject
+from aviutl2_api import LiveProject
 
 with LiveProject.connect(pid=32652) as project:
     title = project.add_text(
@@ -347,8 +393,7 @@ with LiveProject.connect(pid=32652) as project:
 ### 5.2 `EditPlan`: 複数操作
 
 ```python
-from aviutl2_api.editing import EditPlan, PlanValidationError
-from aviutl2_api.live import LiveProject
+from aviutl2_api import EditPlan, LiveProject, PlanValidationError
 
 plan = EditPlan(sequence="parallel")
 plan.add_video("intro.mp4", key="intro")
@@ -410,10 +455,15 @@ SDKに完全transaction rollbackがないため`PlanResult.atomic`は常に`Fals
 | `opacity` | 0.0..1.0。AviUtl2「透明度」へ反転変換 |
 | `color` | `#RRGGBB`または`RRGGBB` |
 
-text/shape作成時の`x/y/z`, `scale`, `rotation(_x/_y/_z)`, `opacity`は固定値の
-代わりに`linear(start, end)`を受け取る。AviUtl2の「直線移動」へ変換されるため、
+text/shape/image/videoの`x/y/z`, `scale`, `rotation(_x/_y/_z)`, `opacity`は
+固定値の代わりに`linear(start, end)`を受け取る。AviUtl2の「直線移動」へ
+変換されるため、
 日本語item名、`AnimatedValue`、Aliasを直接扱う必要はない。`scale`の両端は正、
 `opacity`の両端は`0.0..1.0`でなければならない。
+
+image/videoは`fit="contain" | "cover"`に対応する。audio methodは視覚transformを
+公開せず、汎用`add_media(kind="audio", ...)`へ視覚引数を渡すと
+`INVALID_MEDIA_ARGUMENTS`で実行前に拒否する。
 
 video/audioでnative durationを取得できない場合、`duration`を明示しない限り拒否する。
 相対media pathはPython processのcurrent working directoryを基準にabsolute pathへ
@@ -427,7 +477,9 @@ with LiveProject.connect(pid=32652) as project:
     title = project.update(title, text="第1章", x=100).primary
 ```
 
-`find(name=, text=, file=, effect=, layer=, at=, api_locked=)`を利用できる。
+`find()` / `find_objects()`では`name`, `name_contains`, `text`,
+`text_contains`, `file`, `file_contains`, `effect`, `layer`, `at`,
+`overlap=(start, end)`, `api_locked`を利用できる。
 通常は`include_alias=False`のsnapshotだけを使い、text/effectは候補objectだけを
 inspection、fileはmedia inventoryで遅延調査する。`one()`は0件と複数件を明示的に
 拒否する。mutation後の古い参照を暗黙に追跡・推測しない。
@@ -475,11 +527,22 @@ Connection/state:
 
 ```text
 LiveProject.connect(pid=None, pipe_name=None, timeout=5.0) -> LiveProject
+project.get_snapshot(include_alias=False) -> ProjectSnapshot
 project.refresh() -> ObjectSelection
-project.summary() -> dict[str, object]
+project.snapshot -> ProjectSnapshot | None  # cached property, not callable
+project.objects -> ObjectSelection          # cached; refreshes only if empty
+project.summary(refresh=True) -> dict[str, object]
 project.preflight(**options) -> PreflightReport
-project.find(name=None, text=None, file=None, effect=None,
-             layer=None, at=None, api_locked=None) -> ObjectSelection
+project.find/find_objects(name=None, name_contains=None,
+             text=None, text_contains=None,
+             file=None, file_contains=None, effect=None,
+             layer=None, at=None, overlap=None,
+             api_locked=None) -> ObjectSelection
+project.describe_schema(subject) -> dict[str, object]
+project.describe_effect(profile) -> dict[str, object]
+project.describe_property(name) -> dict[str, object]
+project.describe_api(operation) -> dict[str, object]
+project.capabilities -> Mapping[str, object]
 project.client -> LiveClient
 ```
 
@@ -489,26 +552,35 @@ Creation:
 project.add_text(text, **placement_transform_style) -> ObjectGroup
 project.add_image(file, **placement_transform) -> ObjectGroup
 project.add_video(file, **placement_transform) -> ObjectGroup
-project.add_audio(file, **placement_transform) -> ObjectGroup
+project.add_audio(file, **placement_effects) -> ObjectGroup
 project.add_media(file, kind="auto", **placement_transform) -> ObjectGroup
 project.add_shape(shape, **placement_transform_style) -> ObjectGroup
 ```
 
 `shape`は`circle`, `rectangle`, `triangle`, `pentagon`, `hexagon`, `star`,
 `heart`, `background`。
-作成系共通引数は`at`, `layer`, `duration`, `x/y/z`, `scale`, `rotation`,
-`rotation_x/y/z`, `opacity`。textは`size`, `color`, `font`、shapeは`width`,
-`height`, `color`も受け取る。media作成のtransformは固定値、text/shape作成は
-固定値または`LinearMotion`を受け取る。
+作成系共通引数は`at`, `layer`, `duration`。映像系はさらに`x/y/z`, `scale`,
+`rotation`, `rotation_x/y/z`, `opacity`を受け取る。textは`size`, `color`,
+`font`、shapeは`width`, `height`, `color`も受け取る。作成時のvisual transformは
+固定値または`LinearMotion`を受け取る。`add_audio()`はvisual transformを公開せず、
+汎用`add_media(kind="audio")`への指定も実行前に構造化エラーで拒否する。
+
+image/mediaは`fit="contain" | "cover"`と
+`apply_exif_orientation=True | False`も受け取る。`fit`はnative probeのsource寸法と
+current scene解像度からscaleを計算し、明示`scale`との併用は拒否する。
+EXIF 3/6/8はZ回転へ合成し、mirrorを伴う2/4/5/7は画素の事前正規化を要求する。
 
 全creation methodは`effects: Sequence[EffectSpec | NativeEffectSpec]`も
 受け取る。指定順、同名Effectの重複、`enabled`を保持し、作成と初期item設定を
 一つのGUI Undo単位で行う。成功時は`PlanResult.effects[key]`にfreshな
 `AppliedEffect` receiptが入る。
 
-native loaderは形式により、映像と音声を別objectにする場合と、`映像再生`を持つ
-一つのcombined objectにする場合がある。`scope="video"` / `scope="audio"`はどちらも
-安全にroutingされ、combined objectでは両scopeの`object_id`が同一になる。
+動画はnative probeで可読性、長さ、寸法、音声track数を検証する。音声trackがある
+動画は、SDK media loaderが音声を既定で無効化する実機仕様を避けるため、検証済みの
+Alias fallbackで`音声付き`を明示有効化したcombined objectとして作成する。
+`scope="video"` / `scope="audio"`は同じobjectへ安全にroutingされ、作成後Alias、
+Effect順、native PNG/PCMで検証できる。音声trackのない動画と画像・音声単体は
+native media loaderを使用する。
 
 ```text
 linear(start: float, end: float) -> LinearMotion
@@ -535,6 +607,7 @@ Effect:
 effect(profile, *, enabled=True, **parameters) -> EffectSpec
 native_effect(name, values, *, enabled=True, scope="primary") -> NativeEffectSpec
 project.available_effect_profiles() -> tuple[str, ...]
+project.describe_effect(profile) -> dict[str, object]
 project.apply_effect(target, spec) -> AppliedEffect
 project.update_effect(target, applied_effect, spec) -> AppliedEffect
 project.add_effect(target, effect, values=None) -> ObjectGroup
@@ -591,9 +664,18 @@ Open/Save後は`compare_aup2_roundtrip(before, after)`で意味比較できる�
 Review/plan:
 
 ```text
-project.render(frame_or_object=None) -> RenderedFrame
+project.render(frame_or_object=None, output_path=None,
+               overwrite=False, timeout=30.0) -> RenderedFrame
+project.render_preview(frame_or_object=None, max_width=480,
+               max_height=None, format="jpeg", quality=85,
+               output_path=None, overwrite=False) -> RenderedPreview
+project.render_previews(frames_or_objects, max_width=480,
+               max_height=None, format="jpeg", quality=85) \
+               -> tuple[RenderedPreview, ...]
 project.contact_sheet(frames=None, columns=4,
-                      thumbnail_width=320) -> ContactSheet
+                      thumbnail_width=320, output_path=None,
+                      overwrite=False) -> ContactSheet
+project.render_contact_sheet(...) -> ContactSheet
 project.render_audio(frame_start, frame_end) -> RenderedAudio
 project.audio_review(frame_start, frame_end) -> (RenderedAudio, AudioAnalysis)
 project.review(**options) -> ReviewBundle
@@ -630,7 +712,10 @@ effect初期値をcreate command自身へ含める。`key`はplan内で一意で
 |---|---|
 | `LiveObject` | object ID、revision、layer、frame範囲、duration、midpoint、name、lock |
 | `ObjectSelection` | iterable、`first()`、厳密な`one()` |
-| `PlanValidation` | valid、revision、resolved placements、warnings、errors |
+| `PlanValidation` | valid、revision、resolved placements、warnings、errors、structured issues |
+| `ValidationIssue` | code、message、machine-readable details |
+| `PlacementConflictError` | layer、frame範囲、conflicting object IDs、suggested layer |
+| `RenderedPreview` | frame、revision、width/height、mime_type、data、sha256 |
 | `PlanResult` | before/after revision、commands、objects、Undo、atomic、rollback、warnings |
 | `RollbackReceipt` | attempted、complete、restored_count、gui_undo_required、warnings |
 
@@ -1323,6 +1408,12 @@ vision_input = rendered.png
 rendered.save("review-0120.png")  # 既存ならFileExistsError
 ```
 
+高水準`LiveProject.render_preview()` / `render_previews()`はnative PNGをmemory内で
+縮小し、既定ではJPEGの`RenderedPreview`を返す。`data`と`mime_type`をagent
+frameworkの実際の画像attachmentへ渡す。`save()`やPNG生成の成功だけを
+Vision確認完了として扱わない。`to_base64()` / `to_data_url()`はbinary transportが
+使えない場合のための変換で、AviUtl2_API本体は特定agent製品へ依存しない。
+
 ### 6.17 native audio renderとQC
 
 ```text
@@ -1460,6 +1551,7 @@ agentが報告・判断する。
 | `SubtitlePlacement` | `cue`, `layer`, `frame_start`, `frame_end`, `client_id` |
 | `SubtitleBatchResult` | previous/new revision、placements、created objects、`undo_grouped` |
 | `RenderedFrame` | frame、dimensions、scene/revision、SHA-256、`png` |
+| `RenderedPreview` | frame、dimensions、scene/revision、SHA-256、MIME、`data` |
 | `ContactSheet` | sampled frames、revision、dimensions、`png` |
 | `RenderedAudio` | inclusive frame range、sample metadata、scene/revision、SHA-256、`pcm_f32le` |
 | `AudioAnalysis` | peak/RMSとdBFS、clip/non-finite count、silence ratio、integrated LUFS |
@@ -1652,12 +1744,225 @@ SDKへ追加された場合も公開API名は維持し、capabilityと内部back
 - [ ] project save/export/playbackをBridgeが実行していない
 - [ ] 結果と未対応事項をユーザーへ報告
 
-## 14. 関連文書
+## 14. `LocalProject` and explicit `SyncSession` API (0.9.6)
 
+### 14.1 `LocalProject`
+
+```python
+from aviutl2_api import LocalProject
+
+local = LocalProject.load("project.aup2")
+print(
+    local.path,
+    local.source_sha256,
+    local.display_scene_id,
+    local.revision,
+    local.dirty,
+)
+```
+
+`LocalProject.load(path)` validates UTF-8, NUL-free structure and ambiguous
+duplicate known sections/keys. The document layer retains ordered sections,
+unknown lines/keys, third-party Effects, and untouched property ordering. It
+patches only known sections changed by the high-level backend. Output is UTF-8
+without BOM and uses CRLF.
+
+`LocalProject.create(width=..., height=..., fps=..., ...)` creates an unbound
+working copy. `reload(discard_changes=False)` refuses to discard dirty memory;
+pass `True` only after deciding that those edits may be lost.
+
+Query methods and properties:
+
+```text
+local.revision -> int
+local.dirty -> bool                 # memory differs from bound disk source
+local.path -> Path | None
+local.source_sha256 -> str | None
+local.display_scene_id -> int
+local.summary() -> dict
+local.objects -> LocalObjectSelection
+local.get_snapshot() -> LocalSnapshot
+local.find(
+    name=..., name_contains=...,
+    text=..., text_contains=...,
+    file=..., file_contains=...,
+    effect=..., layer=..., at=..., overlap=..., api_locked=...,
+)
+```
+
+Local・Live・Syncでfilter名は共通である。ただし`.aup2`から安全に復元できない
+`name`と`api_locked`をLocalへ指定すると、空集合ではなく
+`LOCAL_QUERY_FILTER_UNAVAILABLE`を返す。Syncでは一致確認済みLive側で判定できる。
+
+`LocalObject` is revision-scoped. After a successful mutation, retrieve a fresh
+object from its `PlanResult` or from `local.find()`; stale references fail
+instead of guessing.
+
+Editing uses the same backend-neutral plan as Live:
+
+```python
+from aviutl2_api.editing import EditPlan, effect
+
+plan = EditPlan(sequence="parallel")
+plan.add_text(
+    "第一章",
+    key="title",
+    duration=90,
+    y=-200,
+    effects=[effect("glow", strength=50)],
+)
+
+validation = local.validate(plan)   # no mutation
+result = local.apply(plan)          # atomic in-memory commit, no file write
+```
+
+The initial local backend supports text/shape/media creation, text/transform
+update, move/delete, Effect add/apply, and enable state. Object names and
+structural split/trim/duration/reorder/section/ripple operations fail closed
+when they cannot be represented by the shared plan. Unknown project versions
+may be loaded and checkpointed losslessly but not high-level edited. Until
+multi-scene ownership has a verified host fixture, multi-scene `apply()` fails
+with `LOCAL_SCENE_OWNERSHIP_UNVERIFIED`; this prevents another scene from being
+silently modified.
+
+Local media duration is automatic only when Pillow, OpenCV, or WAVE can provide
+a reliable value. Otherwise pass `duration=`. In a sync session, AviUtl2's
+native media result and post-apply Alias readback become authoritative.
+
+### 14.2 guarded file output
+
+```python
+checkpoint = local.checkpoint()  # project.ai-0001.aup2
+
+copy = local.save_as("edited.aup2")
+
+# Replacing an existing save-as target requires both controls.
+copy = local.save_as(
+    "edited.aup2",
+    overwrite=True,
+    expected_sha256="<current target SHA-256>",
+)
+
+# Replaces the bound source only after rechecking its load-time hash.
+saved = local.save_source(overwrite=True, backup=True)
+```
+
+`checkpoint(path=None)` chooses the first unused `.ai-NNNN.aup2` sibling and
+does not rebind the project. `save_as()` rebinds only after success. Existing
+targets require both `overwrite=True` and the current target hash.
+`save_source()` defaults to `overwrite=False` and writes nothing unless
+`overwrite=True` is explicit. It rechecks `source_sha256` immediately before
+replacement and creates a numbered `.bak` by default. Writes use a same-directory temporary
+file, flush/fsync, then non-overwriting rename or authorized replace.
+
+`LocalProject.apply()` and `SyncSession.apply()` never write a project file.
+Only the three explicit methods above perform file output.
+
+### 14.3 `SyncSession`
+
+```python
+from aviutl2_api.live import LiveProject
+from aviutl2_api.sync import SyncSession
+
+with LiveProject.connect(pid=46016) as live:
+    sync = SyncSession.bind(local, live)
+    status = sync.status()
+    difference = sync.diff()
+    result = sync.apply(plan, operation_id="agent-step-0001")
+```
+
+`apply()`はfresh statusとvalidationを内部で実施する。`validate()`はdry-run UIや
+診断が必要な場合だけ個別に呼ぶ。
+
+Bind compares the local display scene with the Live current scene: scene ID,
+resolution, frame rate/scale, sample rate, object layer/range, and normalized
+Alias. Numeric formatting, Effect IDs, property order, and known
+`Group2`/`Group3` additions are normalized. Source path, Effect values/order,
+enabled state, and media domain are not ignored. Project path is diagnostic;
+semantic equality is authoritative, so an unsaved Live project can still bind.
+
+`SyncStatus.state` values:
+
+| State | Meaning and required action |
+|---|---|
+| `clean` | The only state in which `validate/apply` is permitted. |
+| `local_dirty` | Local revision changed but semantic content still matches; inspect/rebind. |
+| `live_dirty` | Live revision changed but semantic content still matches; refresh/rebind. |
+| `diverged` | Object content/ranges differ or both revisions changed; reconcile manually. |
+| `incompatible` | Scene settings, Alias availability, or capabilities prevent safe binding. |
+
+`LocalProject.dirty` is separate: it reports unsaved disk state and can be true
+while synchronization state remains `clean` after a successful sync operation.
+
+Only a `SyncedObject` returned by `sync.find()` or a prior sync receipt can be
+used for an existing-object shared edit. One-sided and ambiguous matches are
+rejected. Automatic placement is resolved once using Live cursor position and
+the union of occupied ranges on both sides. `at="end"` uses their common end.
+
+Apply order is fixed:
+
+1. fresh Local/Live status and semantic comparison;
+2. local clone simulation;
+3. Live native validation with expected revision;
+4. Live apply with session operation ID;
+5. fresh Live Alias readback;
+6. local in-memory commit.
+
+The cross-backend result reports `atomic=False`; Live is normally one GUI Undo
+unit, but a filesystem/process boundary cannot be an atomic transaction. No
+disk save follows step 6.
+
+`SyncResult`では`local_simulation_result`がLive適用前のsimulation、
+`local_snapshot`がnative Alias readback反映後の最終Local状態、`objects`が最終的な
+同期object対応である。`live_result`、`undo_grouped`、`rollback`、
+`gui_undo_required`、`warnings`もtop-levelで確認できる。
+
+構造化された高水準例外は`code`、`details`、`retryable`、`required_action`を持つ。
+clean状態のplan不正は`SyncValidationError`、状態不一致は`SyncConflictError`、
+部分適用は`SyncPartialApplyError`として区別される。
+
+If Live succeeds and the local commit fails, `SyncPartialApplyError` exposes a
+`SyncRecoveryReceipt(live_applied=True, recovery_required=True)`. Keep the
+session and call `sync.recover(error.receipt)`. Recovery verifies that neither
+side has changed, reuses the operation's Alias readback, and commits only local
+memory. It does not repeat the Live mutation or write a file. If either side
+changed, recovery fails closed and the user must reconcile explicitly.
+
+Calling GUI Undo reverts only Live. The session then reports divergence and
+does not infer a local rollback. A normal recovery is: let the user save the
+desired GUI state, call `local.reload(discard_changes=True)` only with approval,
+and construct a new binding.
+
+### 14.4 lifecycle observation
+
+`project.get_info` includes nullable `project_file_path`. The event journal adds
+`project_loaded` and `project_saving`. SDK callbacks only copy callback-scoped
+metadata into the journal; they do not enter read/edit sections or mutate the
+project. `project_saving` is emitted before AviUtl2 saves, so it must never be
+treated as a save-completed receipt.
+
+Capabilities added in 0.9.6:
+
+```text
+local_project
+lossless_aup2_document
+guarded_checkpoint_save
+explicit_plan_sync
+project_path_observation
+project_lifecycle_notifications
+```
+
+The unsupported host-execution methods remain `project_open`, `project_save`,
+and `project_save_as`. Local file methods are intentionally separate and never
+pretend to command AviUtl2.
+
+### 14.5 Related documents
+
+- `docs/AGENT_API_CARD.md`: LLMへ渡す最小の英語中心API契約
 - `docs/LIVE_BRIDGE_AGENT_QUICK_START.md`: Agent向け最短workflow
-- `docs/releases/v0.9.5.md`: 0.9.5の更新・移行手順と既知制約
+- `docs/releases/v0.9.6.md`: 0.9.6の更新・移行手順と既知制約
 - `docs/LIVE_BRIDGE_PROTOCOL.md`: Wire protocol設計と実装根拠
 - `docs/LIVE_BRIDGE_DEVELOPMENT.md`: native build、security回帰、manual integration
 - `docs/aup2_format_specification.md`: `.aup2` parser/serializer実装ノート
-- `protocol/CAPABILITIES_0.9.5.json`: 静的capability manifest
+- `protocol/CAPABILITIES_0.9.6.json`: 静的capability manifest
 - `protocol/CHANGELOG.md`: protocol変更履歴

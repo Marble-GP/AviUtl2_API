@@ -59,13 +59,16 @@ class TextRenderer(ContentRenderer):
         ],
     }
 
-    def __init__(self, font_dirs: list[Path] | None = None):
+    def __init__(self, font_dirs: list[Path] | None = None) -> None:
         """Initialize text renderer.
 
         Args:
             font_dirs: Additional font directories to search
         """
-        self._font_cache: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
+        self._font_cache: dict[
+            tuple[str, int],
+            ImageFont.FreeTypeFont | ImageFont.ImageFont,
+        ] = {}
         self._font_dirs = list(self.FONT_DIRS)
         if font_dirs:
             self._font_dirs.extend(font_dirs)
@@ -107,9 +110,6 @@ class TextRenderer(ContentRenderer):
         text_color = get_property_string(effect.properties, "文字色", "ffffff")
         shadow_color = get_property_string(effect.properties, "影・縁色", "000000")
         decoration = get_property_string(effect.properties, "文字装飾", "標準文字")
-        bold = get_property_value_at_frame(effect.properties, "B", frame, obj, 0.0)
-        italic = get_property_value_at_frame(effect.properties, "I", frame, obj, 0.0)
-
         if not text:
             # Return empty 1x1 transparent image
             return np.zeros((1, 1, 4), dtype=np.uint8), (1, 1)
@@ -157,18 +157,19 @@ class TextRenderer(ContentRenderer):
             return self._font_cache[cache_key]
 
         # Try to find font file
-        font = self._find_font(font_name, size)
-        if font:
-            self._font_cache[cache_key] = font
-            return font
+        found_font = self._find_font(font_name, size)
+        if found_font:
+            self._font_cache[cache_key] = found_font
+            return found_font
 
         # Fallback to default font
         try:
-            font = ImageFont.load_default()
+            fallback_font = ImageFont.load_default()
         except Exception:
-            font = ImageFont.load_default()
+            fallback_font = ImageFont.load_default()
 
-        return font
+        self._font_cache[cache_key] = fallback_font
+        return fallback_font
 
     def _find_font(
         self,
@@ -278,8 +279,8 @@ class TextRenderer(ContentRenderer):
             line_height = 20
 
         # Calculate total size
-        max_width = 0
-        total_height = 0
+        max_width = 0.0
+        total_height = 0.0
 
         for i, line in enumerate(lines):
             if line:
@@ -294,8 +295,8 @@ class TextRenderer(ContentRenderer):
 
         # Add padding
         padding = 8
-        width = max(1, max_width + padding * 2)
-        height = max(1, total_height + padding * 2)
+        width = max(1, int(max_width + padding * 2))
+        height = max(1, int(total_height + padding * 2))
 
         # Increase size for decorations
         if decoration in ("影付き文字", "影付き"):
@@ -310,7 +311,7 @@ class TextRenderer(ContentRenderer):
         draw = ImageDraw.Draw(img)
 
         # Draw text
-        y = padding
+        y: float = float(padding)
 
         for line in lines:
             x = padding

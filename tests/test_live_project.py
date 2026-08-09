@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from PIL import Image
 
 from aviutl2_api.editing import (
     AddTextInstruction,
     EditPlan,
     LinearMotion,
+    PlacementConflictError,
     PlanApplyError,
     ProjectChangedError,
     Transform,
@@ -21,6 +25,7 @@ from aviutl2_api.live import (
     LiveClient,
     LiveObject,
     LiveProject,
+    RenderedFrame,
 )
 from aviutl2_api.live.catalog import (
     CatalogEffect,
@@ -334,6 +339,16 @@ def _project(fake: FakeHighLevelClient) -> LiveProject:
     return LiveProject(cast(LiveClient, fake))
 
 
+def test_live_plan_accepts_a_verified_synced_object_target() -> None:
+    project = _project(FakeHighLevelClient())
+    target = project.find(layer=0).one()
+    synced = SimpleNamespace(live=target)
+
+    validation = project.validate(EditPlan().update(synced, x=25))
+
+    assert validation.valid
+
+
 def test_parallel_plan_uses_cursor_and_first_free_layers() -> None:
     fake = FakeHighLevelClient()
     project = _project(fake)
@@ -432,7 +447,7 @@ def test_media_duration_comes_from_native_probe() -> None:
     assert fake.validated[0]["length"] == 60
 
 
-def test_native_video_transform_targets_video_playback_effect() -> None:
+def test_video_with_audio_uses_verified_combined_alias() -> None:
     fake = FakeHighLevelClient()
     project = _project(fake)
 
@@ -441,10 +456,36 @@ def test_native_video_transform_targets_video_playback_effect() -> None:
     )
 
     assert validation.valid
-    assert fake.validated[0]["items"] == [
-        {"effect": "映像再生", "item": "Y", "value": "300.00"},
-        {"effect": "映像再生", "item": "拡大率", "value": "45.00"},
-    ]
+    assert fake.validated[0]["op"] == "object.create_from_alias"
+    assert "音声付き=1" in fake.validated[0]["alias"]
+    assert "Y=300.00" in fake.validated[0]["alias"]
+    assert "拡大率=45.00" in fake.validated[0]["alias"]
+
+
+def test_native_video_without_audio_track_is_not_enabled() -> None:
+    class SilentVideoClient(FakeHighLevelClient):
+        def probe_media(self, _file: object) -> MediaProbe:
+            return MediaProbe(
+                True,
+                True,
+                True,
+                True,
+                True,
+                "video",
+                1,
+                0,
+                2.0,
+                1920,
+                1080,
+            )
+
+    fake = SilentVideoClient()
+    project = _project(fake)
+
+    validation = project.validate(EditPlan().add_video("silent.mp4"))
+
+    assert validation.valid
+    assert fake.validated[0]["items"] == []
 
 
 def test_existing_native_video_transform_uses_inspected_effect() -> None:
@@ -483,7 +524,23 @@ def test_existing_native_video_transform_uses_inspected_effect() -> None:
 
 
 def test_parallel_media_group_excludes_other_command_primaries() -> None:
-    fake = FakeHighLevelClient(linked_media=True)
+    class LinkedMediaClient(FakeHighLevelClient):
+        def probe_media(self, _file: object) -> MediaProbe:
+            return MediaProbe(
+                True,
+                True,
+                True,
+                True,
+                True,
+                "video",
+                1,
+                0,
+                2.0,
+                1920,
+                1080,
+            )
+
+    fake = LinkedMediaClient(linked_media=True)
     project = _project(fake)
     plan = EditPlan(sequence="parallel")
     plan.add_text("Title", key="title", duration=30)
@@ -503,10 +560,124 @@ def test_explicit_collision_and_stale_reference_are_rejected() -> None:
     collision = project.validate(EditPlan().add_text("x", at=10, layer=0))
     assert not collision.valid
     assert "occupied" in collision.errors[0]
+    assert collision.issues[0].code == "TIMELINE_PLACEMENT_CONFLICT"
+    assert collision.issues[0].details["conflicting_object_ids"] == ("obj-10-0",)
+    assert collision.issues[0].details["suggested_layer"] == 1
+
+    with pytest.raises(PlacementConflictError) as raised:
+        project.add_text("x", at=10, layer=0)
+    assert raised.value.suggested_layer == 1
 
     stale = LiveObject(SnapshotObject("obj-9-0", 9, 0, 0, 1, None, None))
     with pytest.raises(ProjectChangedError, match="stale"):
         project.update(stale, x=10)
+
+
+def test_state_discovery_names_are_explicit_and_fresh() -> None:
+    fake = FakeHighLevelClient()
+    project = _project(fake)
+
+    snapshot = project.get_snapshot()
+    objects = project.objects
+    selected = project.find_objects(name_contains="IST", overlap=(10, 40))
+
+    assert snapshot.revision == 10
+    assert project.snapshot == snapshot
+    assert objects.one().name == "existing"
+    assert selected.one().object_id == "obj-10-0"
+    assert project.describe_api("state")["fresh_snapshot"] == ("project.get_snapshot()")
+
+
+def test_live_project_render_accepts_low_level_output_arguments(
+    tmp_path: Path,
+) -> None:
+    class RenderClient(FakeHighLevelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.render_call: tuple[object, ...] | None = None
+
+        def render_frame(
+            self,
+            frame: int,
+            *,
+            output_path: object = None,
+            overwrite: bool = False,
+            timeout: float = 30.0,
+        ) -> RenderedFrame:
+            self.render_call = (frame, output_path, overwrite, timeout)
+            return RenderedFrame(frame, 16, 9, 0, self.revision, "0" * 64, b"png")
+
+    fake = RenderClient()
+    project = _project(fake)
+    destination = tmp_path / "preview.png"
+
+    frame = project.render(
+        12,
+        output_path=destination,
+        overwrite=True,
+        timeout=7.5,
+    )
+
+    assert frame.frame == 12
+    assert fake.render_call == (12, destination, True, 7.5)
+
+
+def test_live_effect_and_property_schema_report_host_availability() -> None:
+    project = _project(FakeSemanticEffectClient())
+
+    glow = project.describe_schema("glow")
+    opacity = project.describe_schema("opacity")
+
+    assert glow["available"] is True
+    assert glow["native_name"] == "グロー"
+    assert opacity["unit"] == "normalized_0_to_1"
+    assert opacity["meaning"] == "0 is transparent; 1 is opaque"
+
+
+def test_image_fit_and_exif_orientation_are_resolved_before_apply(
+    tmp_path: Path,
+) -> None:
+    class FakeImageClient(FakeHighLevelClient):
+        def probe_media(self, _file: object) -> MediaProbe:
+            return MediaProbe(
+                True,
+                True,
+                True,
+                True,
+                True,
+                "image",
+                1,
+                0,
+                0.0,
+                4000,
+                3000,
+            )
+
+    source = tmp_path / "portrait.jpg"
+    image = Image.new("RGB", (40, 30), (20, 30, 40))
+    exif = Image.Exif()
+    exif[274] = 6
+    image.save(source, exif=exif)
+    fake = FakeImageClient()
+    project = _project(fake)
+
+    validation = project.validate(
+        EditPlan().add_image(
+            source,
+            key="photo",
+            fit="contain",
+            apply_exif_orientation=True,
+        )
+    )
+
+    assert validation.valid
+    assert fake.validated[0]["items"] == [
+        {"effect": "標準描画", "item": "拡大率", "value": "27.00"},
+        {"effect": "標準描画", "item": "Z軸回転", "value": "90.00"},
+    ]
+
+    with pytest.raises(ValueError, match="fit and scale"):
+        EditPlan().add_image(source, fit="contain", scale=50)
 
 
 def test_native_failure_exposes_rollback_receipt() -> None:
@@ -562,8 +733,9 @@ def test_legacy_alias_fallback_and_mixed_plan_refusal() -> None:
         project.apply(mixed)
 
     transformed_media = EditPlan().add_video("clip.mp4", x=10)
-    with pytest.raises(CapabilityUnavailableError, match="cannot apply"):
-        project.validate(transformed_media)
+    validation = project.validate(transformed_media)
+    assert validation.valid
+    assert fake.validated[0]["op"] == "object.create_from_alias"
 
 
 def test_context_manager_closes_low_level_client() -> None:
@@ -608,6 +780,39 @@ def test_nested_host_cursor_and_visible_empty_layers_are_supported() -> None:
 
     assert project.summary()["cursor_frame"] == 42
     assert [item.layer for item in validation.placements] == list(range(6))
+
+
+def test_parallel_placement_extends_beyond_current_object_layer_max() -> None:
+    class EmptyTimelineClient(FakeHighLevelClient):
+        def get_project_info(self) -> dict[str, Any]:
+            return {
+                "cursor": {"frame": 0, "layer": 0},
+                "frame_max": 0,
+                "layer_max": 0,
+            }
+
+        def get_snapshot(self, *, include_alias: bool = False) -> ProjectSnapshot:
+            del include_alias
+            return ProjectSnapshot(self.revision, 0, ())
+
+        def get_layers(self, *, start: int = 0, count: int = 128) -> LayerPage:
+            layers = (
+                (LayerInfo(0, None, True, False, True, 0),)
+                if start == 0 and count > 0
+                else ()
+            )
+            return LayerPage(self.revision, 0, 0, 0, 1, start, layers)
+
+    project = _project(EmptyTimelineClient())
+    plan = EditPlan(sequence="parallel")
+    plan.add_shape("circle", key="shape")
+    plan.add_text("Title", key="title")
+    plan.add_video("clip.mp4", key="video", duration=60)
+
+    validation = project.validate(plan)
+
+    assert validation.valid
+    assert [item.layer for item in validation.placements] == [0, 1, 2]
 
 
 def test_create_time_effect_stack_is_ordered_and_receipted() -> None:

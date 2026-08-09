@@ -83,12 +83,8 @@ def test_shared_ping_fixtures() -> None:
 
 
 def test_shared_batch_validation_fixtures() -> None:
-    request = json.loads(
-        (FIXTURES / "batch_validate.request.json").read_bytes()
-    )
-    response = decode_response(
-        (FIXTURES / "batch_validate.response.json").read_bytes()
-    )
+    request = json.loads((FIXTURES / "batch_validate.request.json").read_bytes())
+    response = decode_response((FIXTURES / "batch_validate.response.json").read_bytes())
 
     assert request["method"] == "batch.validate"
     assert request["params"]["commands"][0]["client_id"] == "title"
@@ -216,8 +212,7 @@ def test_create_command_uses_inclusive_model_duration() -> None:
 
 def test_live_client_sends_typed_batch_command() -> None:
     response = (
-        b'{"id":"py-00000001","ok":true,"result":'
-        b'{"valid":true,"command_count":1}}'
+        b'{"id":"py-00000001","ok":true,"result":{"valid":true,"command_count":1}}'
     )
     stream = ScriptedStream(encode_frame(response), write_chunk=4096)
     client = LiveClient(FramedTransport(stream))
@@ -327,9 +322,7 @@ def test_media_inventory_uses_long_default_timeout() -> None:
         "unreadable_count": 0,
         "files": [],
     }
-    response = json.dumps(
-        {"id": "py-00000001", "ok": True, "result": result}
-    ).encode()
+    response = json.dumps({"id": "py-00000001", "ok": True, "result": result}).encode()
     stream = ScriptedStream(encode_frame(response), write_chunk=4096)
     client = LiveClient(FramedTransport(stream), default_timeout=5.0)
 
@@ -358,9 +351,7 @@ def test_effect_catalog_returns_typed_page() -> None:
                     "filter_object": False,
                     "camera": False,
                 },
-                "items": [
-                    {"name": "再生速度", "type": "number", "type_code": 2}
-                ],
+                "items": [{"name": "再生速度", "type": "number", "type_code": 2}],
             }
         ],
     }
@@ -598,9 +589,7 @@ def test_duplicate_object_verifies_fresh_snapshot() -> None:
         "<I", stream.written[second_offset : second_offset + 4]
     )[0]
     second_request = json.loads(
-        stream.written[
-            second_offset + 4 : second_offset + 4 + second_size
-        ]
+        stream.written[second_offset + 4 : second_offset + 4 + second_size]
     )
     assert second_request["method"] == "project.get_snapshot"
 
@@ -644,9 +633,7 @@ def test_split_media_returns_typed_contiguous_ranges() -> None:
         "snapshot_required": False,
         "undo_grouped": True,
     }
-    response = json.dumps(
-        {"id": "py-00000001", "ok": True, "result": result}
-    ).encode()
+    response = json.dumps({"id": "py-00000001", "ok": True, "result": result}).encode()
     stream = ScriptedStream(encode_frame(response), write_chunk=4096)
     client = LiveClient(FramedTransport(stream))
 
@@ -838,9 +825,7 @@ def test_set_animation_inspects_track_before_native_update() -> None:
         "<I", stream.written[second_offset : second_offset + 4]
     )[0]
     request = json.loads(
-        stream.written[
-            second_offset + 4 : second_offset + 4 + second_size
-        ]
+        stream.written[second_offset + 4 : second_offset + 4 + second_size]
     )
     assert request["method"] == "object.set_item"
     assert request["params"]["value"] == "0.00,100.00,直線移動,0"
@@ -894,9 +879,7 @@ def test_set_playback_rate_converts_multiplier_without_changing_length() -> None
         "<I", stream.written[second_offset : second_offset + 4]
     )[0]
     request = json.loads(
-        stream.written[
-            second_offset + 4 : second_offset + 4 + second_size
-        ]
+        stream.written[second_offset + 4 : second_offset + 4 + second_size]
     )
     assert request["method"] == "object.set_item"
     assert request["params"]["effect"] == "動画ファイル"
@@ -989,10 +972,7 @@ def test_render_frame_reassembles_and_verifies_native_png(
                 {"id": "py-00000002", "ok": True, "result": chunk_result}
             ).encode()
         )
-        + encode_frame(
-            b'{"id":"py-00000003","ok":true,'
-            b'"result":{"released":true}}'
-        )
+        + encode_frame(b'{"id":"py-00000003","ok":true,"result":{"released":true}}')
     )
     stream = ScriptedStream(responses, write_chunk=4096)
     client = LiveClient(FramedTransport(stream))

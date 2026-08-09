@@ -111,9 +111,7 @@ class SubtitleBatchResult:
 
     def __post_init__(self) -> None:
         if len(self.placements) != len(self.objects):
-            raise ProtocolError(
-                "subtitle placements do not match created objects"
-            )
+            raise ProtocolError("subtitle placements do not match created objects")
 
 
 def _parse_blocks(
@@ -122,9 +120,7 @@ def _parse_blocks(
     webvtt: bool,
     language: str | None,
 ) -> tuple[SubtitleCue, ...]:
-    normalized = text.lstrip("\ufeff").replace("\r\n", "\n").replace(
-        "\r", "\n"
-    )
+    normalized = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     if webvtt:
         lines = normalized.splitlines()
         if not lines or not lines[0].strip().startswith("WEBVTT"):
@@ -136,16 +132,10 @@ def _parse_blocks(
         lines = block.splitlines()
         if not lines:
             continue
-        if webvtt and lines[0].lstrip().startswith(
-            ("NOTE", "STYLE", "REGION")
-        ):
+        if webvtt and lines[0].lstrip().startswith(("NOTE", "STYLE", "REGION")):
             continue
         timing_index = next(
-            (
-                index
-                for index, line in enumerate(lines[:2])
-                if _TIMING.match(line)
-            ),
+            (index for index, line in enumerate(lines[:2]) if _TIMING.match(line)),
             -1,
         )
         if timing_index < 0:
@@ -235,9 +225,7 @@ def assign_subtitle_layers(
 ) -> tuple[SubtitlePlacement, ...]:
     intervals: dict[int, list[tuple[int, int]]] = {
         layer: [
-            (obj.frame_start, obj.frame_end)
-            for obj in occupied
-            if obj.layer == layer
+            (obj.frame_start, obj.frame_end) for obj in occupied if obj.layer == layer
         ]
         for layer in range(
             policy.base_layer,
@@ -254,8 +242,7 @@ def assign_subtitle_layers(
         selected: int | None = None
         for layer, ranges in intervals.items():
             collision = any(
-                frame_start <= other_end
-                and other_start <= frame_end
+                frame_start <= other_end and other_start <= frame_end
                 for other_start, other_end in ranges
             )
             if not collision:
@@ -264,9 +251,7 @@ def assign_subtitle_layers(
             if policy.overlap == "reject":
                 break
         if selected is None:
-            raise ValueError(
-                f"subtitle cue {index} cannot be placed without overlap"
-            )
+            raise ValueError(f"subtitle cue {index} cannot be placed without overlap")
         intervals[selected].append((frame_start, frame_end))
         language = cue.language or "und"
         client_id = f"subtitle-{index:04d}-{language}"[:128]

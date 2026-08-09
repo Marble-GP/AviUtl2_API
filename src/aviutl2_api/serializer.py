@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any
 
 from aviutl2_api.models import (
     AnimatedValue,
@@ -20,7 +20,7 @@ class Aup2Serializer:
 
     LINE_ENDING = "\r\n"  # CRLF as per spec
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lines: list[str] = []
 
     def serialize(self, project: Project) -> str:

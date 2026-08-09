@@ -78,9 +78,7 @@ class ImageRenderer(ContentRenderer):
         path = Path(file_path)
         if not path.exists():
             self._missing_files.add(file_path)
-            img = self._create_placeholder(
-                (200, 200), f"Not found:\n{path.name}"
-            )
+            img = self._create_placeholder((200, 200), f"Not found:\n{path.name}")
             return img, (img.shape[1], img.shape[0])
 
         try:

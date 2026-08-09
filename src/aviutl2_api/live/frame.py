@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import math
 from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
+from typing import Literal
 
 from PIL import Image, ImageDraw
 
@@ -39,6 +42,109 @@ class RenderedFrame:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(self.png)
         return destination
+
+    def preview(
+        self,
+        *,
+        max_width: int | None = 480,
+        max_height: int | None = None,
+        format: Literal["jpg", "jpeg", "png"] = "jpeg",
+        quality: int = 85,
+    ) -> RenderedPreview:
+        """Create a compact in-memory image suitable for an agent adapter."""
+
+        return make_preview(
+            self,
+            max_width=max_width,
+            max_height=max_height,
+            format=format,
+            quality=quality,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RenderedPreview:
+    """A compact rendered image ready to attach to a model vision input."""
+
+    frame: int
+    width: int
+    height: int
+    scene_id: int
+    revision: int
+    sha256: str
+    mime_type: str
+    data: bytes
+
+    def save(
+        self,
+        path: str | PathLike[str],
+        *,
+        overwrite: bool = False,
+    ) -> Path:
+        destination = Path(path).expanduser().resolve()
+        if destination.exists() and not overwrite:
+            raise FileExistsError(
+                f"refusing to overwrite existing preview: {destination}"
+            )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(self.data)
+        return destination
+
+    def to_base64(self) -> str:
+        """Return ASCII base64 for transports that cannot carry binary data."""
+
+        return base64.b64encode(self.data).decode("ascii")
+
+    def to_data_url(self) -> str:
+        """Return a directly embeddable image data URL."""
+
+        return f"data:{self.mime_type};base64,{self.to_base64()}"
+
+
+def make_preview(
+    frame: RenderedFrame,
+    *,
+    max_width: int | None = 480,
+    max_height: int | None = None,
+    format: Literal["jpg", "jpeg", "png"] = "jpeg",
+    quality: int = 85,
+) -> RenderedPreview:
+    """Resize one native frame without writing a host-side temporary file."""
+
+    if max_width is None and max_height is None:
+        raise ValueError("max_width or max_height is required")
+    if max_width is not None and max_width < 1:
+        raise ValueError("max_width must be positive or None")
+    if max_height is not None and max_height < 1:
+        raise ValueError("max_height must be positive or None")
+    normalized_format = "jpeg" if format == "jpg" else format
+    if normalized_format not in {"jpeg", "png"}:
+        raise ValueError("format must be 'jpeg', 'jpg', or 'png'")
+    if not 1 <= quality <= 95:
+        raise ValueError("quality must be between 1 and 95")
+    with Image.open(io.BytesIO(frame.png)) as source:
+        image = source.convert("RGB")
+        width_limit = max_width if max_width is not None else image.width
+        height_limit = max_height if max_height is not None else image.height
+        image.thumbnail((width_limit, height_limit), Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        if normalized_format == "jpeg":
+            image.save(output, format="JPEG", quality=quality, optimize=True)
+            mime_type = "image/jpeg"
+        else:
+            image.save(output, format="PNG", optimize=True)
+            mime_type = "image/png"
+        data = output.getvalue()
+        return RenderedPreview(
+            frame=frame.frame,
+            width=image.width,
+            height=image.height,
+            scene_id=frame.scene_id,
+            revision=frame.revision,
+            sha256=hashlib.sha256(data).hexdigest(),
+            mime_type=mime_type,
+            data=data,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,12 +180,7 @@ def make_contact_sheet(
     thumbnail_width: int = 320,
     label_height: int = 24,
 ) -> ContactSheet:
-    if (
-        not frames
-        or columns < 1
-        or thumbnail_width < 32
-        or label_height < 0
-    ):
+    if not frames or columns < 1 or thumbnail_width < 32 or label_height < 0:
         raise ValueError("contact sheet dimensions are invalid")
     if len(frames) > 64:
         raise ValueError("a contact sheet supports at most 64 frames")
@@ -165,6 +266,8 @@ def review_sample_frames(
 __all__ = [
     "ContactSheet",
     "RenderedFrame",
+    "RenderedPreview",
     "make_contact_sheet",
+    "make_preview",
     "review_sample_frames",
 ]

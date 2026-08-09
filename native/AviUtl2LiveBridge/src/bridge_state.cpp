@@ -88,4 +88,11 @@ void BridgeState::record_event(
     dispatcher_.record_event(event_type);
 }
 
+void BridgeState::record_project_event(
+    const std::string_view event_type,
+    const std::wstring_view project_file_path) noexcept {
+    sdk_.observe_project_file_path(project_file_path);
+    dispatcher_.record_event(event_type);
+}
+
 }  // namespace aviutl2::live

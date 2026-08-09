@@ -3,8 +3,10 @@
 #include <atomic>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct EDIT_HANDLE;
@@ -30,6 +32,7 @@ struct ProjectInfo final {
     int cursor_layer = 0;
     int frame_max = 0;
     int layer_max = 0;
+    std::string project_file_path;
 };
 
 struct ProjectInfoResult final {
@@ -584,6 +587,8 @@ class HostSdkAdapter final : public SdkAdapter {
 public:
     explicit HostSdkAdapter(EDIT_HANDLE* edit_handle) noexcept;
 
+    void observe_project_file_path(std::wstring_view path) noexcept;
+
     void set_stopping(bool stopping) noexcept override;
     [[nodiscard]] EditState get_edit_state() const noexcept override;
     [[nodiscard]] ProjectInfoResult get_project_info() noexcept override;
@@ -709,6 +714,8 @@ public:
 private:
     EDIT_HANDLE* edit_handle_;
     std::atomic_bool stopping_ = false;
+    std::mutex project_path_mutex_;
+    std::string project_file_path_;
 };
 
 [[nodiscard]] std::string edit_state_name(EditState state);

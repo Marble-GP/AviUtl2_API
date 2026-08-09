@@ -44,12 +44,8 @@ class ShadowFilter(FilterEffect):
             Image with shadow
         """
         # Get shadow parameters
-        offset_x = get_property_value_at_frame(
-            effect.properties, "X", frame, obj, 5.0
-        )
-        offset_y = get_property_value_at_frame(
-            effect.properties, "Y", frame, obj, 5.0
-        )
+        offset_x = get_property_value_at_frame(effect.properties, "X", frame, obj, 5.0)
+        offset_y = get_property_value_at_frame(effect.properties, "Y", frame, obj, 5.0)
         opacity = get_property_value_at_frame(
             effect.properties, "濃さ", frame, obj, 60.0
         )
@@ -87,7 +83,10 @@ class ShadowFilter(FilterEffect):
         if diffusion > 0:
             blur_kernel = int(diffusion * 2) | 1
             blur_kernel = max(3, blur_kernel)
-            shadow = cv2.GaussianBlur(shadow, (blur_kernel, blur_kernel), diffusion)
+            shadow = np.asarray(
+                cv2.GaussianBlur(shadow, (blur_kernel, blur_kernel), diffusion),
+                dtype=np.uint8,
+            )
 
         # Place shadow in result (with offset)
         shadow_x = padding + int(offset_x)
@@ -105,9 +104,7 @@ class ShadowFilter(FilterEffect):
         dst_y2 = min(canvas_h, shadow_y + h)
 
         if dst_x2 > dst_x1 and dst_y2 > dst_y1:
-            result[dst_y1:dst_y2, dst_x1:dst_x2] = shadow[
-                src_y1:src_y2, src_x1:src_x2
-            ]
+            result[dst_y1:dst_y2, dst_x1:dst_x2] = shadow[src_y1:src_y2, src_x1:src_x2]
 
         # Place original image on top (centered in padding)
         orig_x = padding
@@ -119,8 +116,7 @@ class ShadowFilter(FilterEffect):
         for c in range(3):
             result[orig_y : orig_y + h, orig_x : orig_x + w, c] = (
                 image[:, :, c] * orig_alpha
-                + result[orig_y : orig_y + h, orig_x : orig_x + w, c]
-                * (1 - orig_alpha)
+                + result[orig_y : orig_y + h, orig_x : orig_x + w, c] * (1 - orig_alpha)
             ).astype(np.uint8)
 
         # Combine alpha channels

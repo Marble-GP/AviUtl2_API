@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -12,6 +11,7 @@ import numpy as np
 from aviutl2_api.renderer.blend import blend_onto, opacity_from_transparency
 from aviutl2_api.renderer.canvas import FrameBuffer
 from aviutl2_api.renderer.content.base import ContentRenderer, RenderContext
+from aviutl2_api.renderer.filters.base import FilterEffect
 from aviutl2_api.renderer.interpolation import (
     get_property_string,
     get_property_value_at_frame,
@@ -19,7 +19,7 @@ from aviutl2_api.renderer.interpolation import (
 from aviutl2_api.renderer.transform import apply_transform
 
 if TYPE_CHECKING:
-    from aviutl2_api.models import Effect, Project, Scene, TimelineObject
+    from aviutl2_api.models import Effect, Project, TimelineObject
 
 
 @dataclass
@@ -86,8 +86,9 @@ class FrameRenderer:
         self._content_renderers: list[ContentRenderer] = []
         self._register_default_renderers()
 
-        # Filter effects registry
-        self._filter_effects: dict[str, object] = {}
+        # Runtime filter pipeline. Keep this distinct from future filter config.
+        self._filter_config: dict[str, object] = {}
+        self._filter_pipeline: list[FilterEffect] = []
         self._register_default_filters()
 
     def _register_default_renderers(self) -> None:
@@ -123,35 +124,33 @@ class FrameRenderer:
 
     def _register_default_filters(self) -> None:
         """Register default filter effects."""
-        from aviutl2_api.renderer.filters.base import FilterEffect
-
-        self._filter_effects: list[FilterEffect] = []
+        self._filter_pipeline.clear()
 
         try:
             from aviutl2_api.renderer.filters.blur import BlurFilter
 
-            self._filter_effects.append(BlurFilter())
+            self._filter_pipeline.append(BlurFilter())
         except ImportError:
             pass
 
         try:
             from aviutl2_api.renderer.filters.border import BorderFilter
 
-            self._filter_effects.append(BorderFilter())
+            self._filter_pipeline.append(BorderFilter())
         except ImportError:
             pass
 
         try:
             from aviutl2_api.renderer.filters.shadow import ShadowFilter
 
-            self._filter_effects.append(ShadowFilter())
+            self._filter_pipeline.append(ShadowFilter())
         except ImportError:
             pass
 
         try:
             from aviutl2_api.renderer.filters.glow import GlowFilter
 
-            self._filter_effects.append(GlowFilter())
+            self._filter_pipeline.append(GlowFilter())
         except ImportError:
             pass
 
@@ -321,6 +320,7 @@ class FrameRenderer:
             return
 
         # Find a renderer that can handle this effect
+        assert self.scene is not None
         content_array = None
         for renderer in self._content_renderers:
             if renderer.can_render(main_effect.name):
@@ -385,9 +385,7 @@ class FrameRenderer:
             draw_effect.properties, "透明度", frame, obj, 0.0
         )
 
-        blend_mode = get_property_string(
-            draw_effect.properties, "合成モード", "通常"
-        )
+        blend_mode = get_property_string(draw_effect.properties, "合成モード", "通常")
 
         # Apply transforms
         transformed, dest_x, dest_y = apply_transform(
@@ -438,7 +436,7 @@ class FrameRenderer:
             Filtered image
         """
         # Find a filter that can handle this effect
-        for filter_effect in self._filter_effects:
+        for filter_effect in self._filter_pipeline:
             if filter_effect.can_apply(effect.name):
                 try:
                     return filter_effect.apply(image, effect, frame, obj)

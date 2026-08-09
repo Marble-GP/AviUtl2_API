@@ -284,9 +284,7 @@ def validate_standard_effects(project: Project) -> StandardEffectValidation:
                         )
                     continue
                 metadata = {
-                    name
-                    for name in effect.properties
-                    if name == "effect.disable"
+                    name for name in effect.properties if name == "effect.disable"
                 }
                 if metadata and not _is_valid_item_value(
                     effect.properties["effect.disable"], "check"
@@ -303,8 +301,7 @@ def validate_standard_effects(project: Project) -> StandardEffectValidation:
                 actual = {
                     name
                     for name in effect.properties
-                    if not re.fullmatch(r"Group\d*", name)
-                    and name not in metadata
+                    if not re.fullmatch(r"Group\d*", name) and name not in metadata
                 }
                 unknown = sorted(actual - schema)
                 if unknown:

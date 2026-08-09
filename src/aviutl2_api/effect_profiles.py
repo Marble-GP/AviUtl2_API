@@ -486,6 +486,93 @@ def available_effect_profiles() -> tuple[str, ...]:
     return EFFECT_PROFILES
 
 
+def _schema_default(value: NativeValue) -> object:
+    if isinstance(value, StaticValue):
+        return value.value
+    if isinstance(value, AnimatedValue):
+        return {
+            "start": value.start,
+            "end": value.end,
+            "motion": value.animation.motion_type,
+        }
+    return value
+
+
+def _parameter_unit(name: str, kind: BindingKind) -> str:
+    if name.endswith("_px"):
+        return "pixel"
+    if name.endswith("_degrees"):
+        return "degree"
+    if name.endswith("_seconds"):
+        return "second"
+    if kind == "opacity":
+        return "normalized_0_to_1"
+    if kind == "color":
+        return "#RRGGBB"
+    if kind == "check":
+        return "boolean"
+    if kind == "select":
+        return "enum"
+    return "aviutl2_native_scale"
+
+
+def describe_effect_profile(profile: str) -> dict[str, object]:
+    """Return a JSON-friendly contract for one curated effect profile.
+
+    The result deliberately exposes only ranges and enums guaranteed by this
+    package.  It does not guess native slider limits that the SDK does not
+    publish.
+    """
+
+    definition = get_effect_profile(profile)
+    templates = {item.name: item for item in definition.items}
+    parameters: dict[str, object] = {}
+    for name, binding in definition.parameters.items():
+        default = _schema_default(templates[binding.item].default)
+        options = definition.enums.get(name)
+        if options is not None:
+            default = next(
+                (semantic for semantic, native in options.items() if native == default),
+                default,
+            )
+        if binding.kind == "color" and isinstance(default, str) and default:
+            default = f"#{default}"
+        parameter: dict[str, object] = {
+            "type": {
+                "check": "boolean",
+                "select": "enum",
+                "color": "color",
+                "file": "file",
+            }.get(binding.kind, "number"),
+            "unit": _parameter_unit(name, binding.kind),
+            "native_item": binding.item,
+            "default": default,
+            "supports_linear": binding.kind in {"number", "opacity"},
+        }
+        if options is not None:
+            parameter["values"] = tuple(options)
+        if binding.kind == "opacity":
+            parameter["minimum"] = 0.0
+            parameter["maximum"] = 1.0
+        parameters[name] = parameter
+    return {
+        "kind": "effect",
+        "profile": definition.profile,
+        "native_name": definition.native_name,
+        "scope": definition.scope,
+        "manifest_version": AUP2_EFFECT_MANIFEST_VERSION,
+        "parameters": parameters,
+        "native_items": tuple(
+            {
+                "name": item.name,
+                "type": item.kind,
+                "default": _schema_default(item.default),
+            }
+            for item in definition.items
+        ),
+    }
+
+
 def get_effect_profile(profile: str) -> EffectProfileDefinition:
     try:
         return _PROFILES[profile]
@@ -707,6 +794,7 @@ __all__ = [
     "ParameterBinding",
     "ResolvedEffect",
     "available_effect_profiles",
+    "describe_effect_profile",
     "get_effect_profile",
     "legacy_compatibility_effect",
     "resolve_effect",

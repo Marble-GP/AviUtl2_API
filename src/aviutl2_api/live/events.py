@@ -77,8 +77,7 @@ class EventWatchResult:
             raise ProtocolError("Live Bridge returned an invalid event watch result")
         parsed = tuple(BridgeEvent.from_wire(value) for value in events)
         if any(
-            left.sequence >= right.sequence
-            for left, right in zip(parsed, parsed[1:])
+            left.sequence >= right.sequence for left, right in zip(parsed, parsed[1:])
         ):
             raise ProtocolError("Live Bridge returned out-of-order events")
         return cls(

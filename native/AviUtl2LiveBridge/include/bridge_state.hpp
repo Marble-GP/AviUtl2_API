@@ -26,6 +26,9 @@ public:
     void stop() noexcept;
     [[nodiscard]] bool running() const noexcept;
     void record_event(std::string_view event_type) noexcept;
+    void record_project_event(
+        std::string_view event_type,
+        std::wstring_view project_file_path) noexcept;
 
 private:
     std::uint32_t pid_;

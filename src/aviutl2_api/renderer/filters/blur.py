@@ -40,9 +40,7 @@ class BlurFilter(FilterEffect):
             Blurred image
         """
         # Get blur parameters
-        radius = get_property_value_at_frame(
-            effect.properties, "範囲", frame, obj, 5.0
-        )
+        radius = get_property_value_at_frame(effect.properties, "範囲", frame, obj, 5.0)
         aspect = get_property_value_at_frame(
             effect.properties, "縦横比", frame, obj, 0.0
         )

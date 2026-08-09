@@ -19,6 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.tmp-*/
 .temp/
 
 # Virtual environments
@@ -59,4 +60,6 @@ Thumbs.db
 # Project specific
 *.a0proj/
 render-tests/
+*.aux2
+manual-sync-*/
 docs/AgentZero_ProjectDescription.md

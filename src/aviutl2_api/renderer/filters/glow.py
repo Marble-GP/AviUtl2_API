@@ -87,7 +87,9 @@ class GlowFilter(FilterEffect):
 
         # Apply threshold (0-255 scale, threshold is 0-100)
         threshold_value = threshold * 2.55  # Convert to 0-255
-        glow_mask = np.clip(luminance - threshold_value, 0, 255) / (255 - threshold_value + 1)
+        glow_mask = np.clip(luminance - threshold_value, 0, 255) / (
+            255 - threshold_value + 1
+        )
         glow_mask = glow_mask * alpha  # Apply alpha
 
         # Create glow layer (always 4 channels)
@@ -110,25 +112,31 @@ class GlowFilter(FilterEffect):
         blur_size = max(3, blur_size)
 
         if blur_amount > 0:
-            glow = cv2.GaussianBlur(glow, (blur_size, blur_size), diffusion / 10)
+            glow = np.asarray(
+                cv2.GaussianBlur(glow, (blur_size, blur_size), diffusion / 10),
+                dtype=np.float32,
+            )
 
         # Adjust strength
         glow[:, :, :3] = glow[:, :, :3] * (strength / 50.0) * (ratio / 100.0)
-        glow = np.clip(glow, 0, 255).astype(np.uint8)
+        glow_u8 = np.clip(glow, 0, 255).astype(np.uint8)
 
         # Add padding for glow expansion
         padding = blur_size
-        result = np.zeros((h + padding * 2, w + padding * 2, 4), dtype=np.uint8)
-
         # Place glow in center
         glow_padded = np.zeros((h + padding * 2, w + padding * 2, 4), dtype=np.float32)
-        glow_padded[padding : padding + h, padding : padding + w] = glow.astype(
+        glow_padded[padding : padding + h, padding : padding + w] = glow_u8.astype(
             np.float32
         )
 
         # Blur the padded glow
-        glow_padded = cv2.GaussianBlur(
-            glow_padded, (blur_size, blur_size), diffusion / 10
+        glow_padded = np.asarray(
+            cv2.GaussianBlur(
+                glow_padded,
+                (blur_size, blur_size),
+                diffusion / 10,
+            ),
+            dtype=np.float32,
         )
 
         if light_only > 0:
@@ -136,29 +144,29 @@ class GlowFilter(FilterEffect):
             result = np.clip(glow_padded, 0, 255).astype(np.uint8)
         else:
             # Composite: glow behind original using additive blend
-            result = glow_padded.copy()
+            result_float = glow_padded.copy()
 
             # Place original on top
             orig_alpha = image[:, :, 3].astype(np.float32) / 255.0
 
             for c in range(3):
                 # Additive blend for glow
-                result[padding : padding + h, padding : padding + w, c] = np.clip(
-                    result[padding : padding + h, padding : padding + w, c]
+                result_float[padding : padding + h, padding : padding + w, c] = np.clip(
+                    result_float[padding : padding + h, padding : padding + w, c]
                     + image[:, :, c].astype(np.float32) * orig_alpha,
                     0,
                     255,
                 )
 
             # Max alpha
-            result[padding : padding + h, padding : padding + w, 3] = np.maximum(
-                result[padding : padding + h, padding : padding + w, 3],
+            result_float[padding : padding + h, padding : padding + w, 3] = np.maximum(
+                result_float[padding : padding + h, padding : padding + w, 3],
                 image[:, :, 3].astype(np.float32),
             )
 
-            result = np.clip(result, 0, 255).astype(np.uint8)
+            result = np.clip(result_float, 0, 255).astype(np.uint8)
 
-        return result
+        return np.asarray(result, dtype=np.uint8)
 
     def get_padding(self, effect: Effect) -> int:
         """Get padding needed for glow effect."""
@@ -166,7 +174,9 @@ class GlowFilter(FilterEffect):
 
         diffusion = effect.properties.get("拡散", 60)
         if isinstance(diffusion, StaticValue):
-            return int(diffusion.value / 5) * 2 + 5
+            value = diffusion.value
+            if isinstance(value, (int, float)):
+                return int(value / 5) * 2 + 5
         elif isinstance(diffusion, (int, float)):
             return int(diffusion / 5) * 2 + 5
         return 25

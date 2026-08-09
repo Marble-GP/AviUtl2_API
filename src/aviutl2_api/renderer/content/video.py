@@ -41,7 +41,7 @@ class VideoRenderer(ContentRenderer):
         self._frame_cache: dict[str, np.ndarray] = {}
         self._cache_size = cache_size
         self._missing_files: set[str] = set()
-        self._video_info: dict[str, dict] = {}
+        self._video_info: dict[str, dict[str, float | int]] = {}
 
     def can_render(self, effect_name: str) -> bool:
         """Check if this renderer handles the effect type."""
@@ -111,7 +111,7 @@ class VideoRenderer(ContentRenderer):
 
         # Get video info
         info = self._video_info.get(file_path, {})
-        total_frames = info.get("total_frames", 1)
+        total_frames = int(info.get("total_frames", 1))
 
         # Clamp frame to valid range
         video_frame = max(0, min(video_frame, total_frames - 1))
@@ -239,11 +239,11 @@ class VideoRenderer(ContentRenderer):
             try:
                 bbox = draw.textbbox((0, 0), line, font=font)
                 tw = bbox[2] - bbox[0]
-                x = (width - tw) // 2
+                text_x = (width - tw) / 2
             except Exception:
-                x = 10
+                text_x = 10
 
-            draw.text((x, y), line, fill=(255, 255, 255, 255), font=font)
+            draw.text((text_x, y), line, fill=(255, 255, 255, 255), font=font)
             y += 16
 
         return np.array(img)
@@ -255,6 +255,6 @@ class VideoRenderer(ContentRenderer):
         self._video_cache.clear()
         self._frame_cache.clear()
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Cleanup on deletion."""
         self.cleanup()

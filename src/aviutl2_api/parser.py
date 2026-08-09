@@ -107,7 +107,8 @@ class Aup2Parser:
 
         # Parse [scene.N] sections
         scene_sections = [
-            (key, data) for key, data in self._sections.items()
+            (key, data)
+            for key, data in self._sections.items()
             if key.startswith("scene.")
         ]
 
@@ -198,7 +199,7 @@ class Aup2Parser:
         self,
         obj_id: int,
         data: dict[str, str],
-        effect_sections: dict[tuple[int, int], dict[str, str]]
+        effect_sections: dict[tuple[int, int], dict[str, str]],
     ) -> TimelineObject:
         """Build a TimelineObject from section data."""
         # Parse frame range
@@ -216,10 +217,9 @@ class Aup2Parser:
         )
 
         # Find and parse effects for this object
-        effect_ids = sorted([
-            eff_id for (o_id, eff_id) in effect_sections.keys()
-            if o_id == obj_id
-        ])
+        effect_ids = sorted(
+            [eff_id for (o_id, eff_id) in effect_sections.keys() if o_id == obj_id]
+        )
 
         for effect_id in effect_ids:
             effect_data = effect_sections[(obj_id, effect_id)]

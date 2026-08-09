@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Literal
+from dataclasses import dataclass
 
 
 @dataclass
@@ -52,7 +51,7 @@ class AnimatedValue:
         return cls(
             start=start,
             end=end,
-            animation=AnimationParams(motion_type=motion_type, param=param)
+            animation=AnimationParams(motion_type=motion_type, param=param),
         )
 
 
@@ -72,6 +71,14 @@ class StaticValue:
 # Type alias for property values
 PropertyValue = StaticValue | AnimatedValue | str
 
+_STRING_PROPERTY_KEYS = frozenset(
+    {
+        "テキスト",
+        "ファイル",
+        "フォント",
+    }
+)
+
 
 def _format_float(v: float) -> str:
     """Format float for .aup2 output."""
@@ -88,6 +95,11 @@ def parse_property_value(key: str, value_str: str) -> PropertyValue:
     Static numeric values: just a number
     String values: anything else
     """
+    # A numeric-looking caption or path is still text.  This also lets the
+    # lossless document layer distinguish "001" from the numeric value 1.
+    if key in _STRING_PROPERTY_KEYS:
+        return value_str
+
     # Check if this looks like an animated value
     # Animated values have at least 4 comma-separated parts with a motion type
     parts = value_str.split(",")

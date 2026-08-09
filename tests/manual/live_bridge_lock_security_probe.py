@@ -66,9 +66,7 @@ def send_invalid_frame(pipe: str, frame: bytes) -> None:
     try:
         written = stream.write(frame, 5.0)
         if written != len(frame):
-            raise AssertionError(
-                f"short invalid-frame write: {written}/{len(frame)}"
-            )
+            raise AssertionError(f"short invalid-frame write: {written}/{len(frame)}")
     finally:
         stream.close()
 
@@ -192,9 +190,7 @@ def main() -> int:
             "OBJECT_API_LOCKED",
         )
 
-        leading_zero_id = (
-            f"obj-{obj.revision}-0{obj.object_id.rsplit('-', 1)[1]}"
-        )
+        leading_zero_id = f"obj-{obj.revision}-0{obj.object_id.rsplit('-', 1)[1]}"
         expect_remote_error(
             "noncanonical leading-zero index",
             lambda: client.call(
@@ -212,9 +208,7 @@ def main() -> int:
                 "object.delete",
                 {
                     "expected_revision": obj.revision,
-                    "target": {
-                        "object_id": f"obj-{obj.revision}-999999999"
-                    },
+                    "target": {"object_id": f"obj-{obj.revision}-999999999"},
                 },
             ),
             "OBJECT_NOT_FOUND",
@@ -225,9 +219,7 @@ def main() -> int:
                 "object.delete",
                 {
                     "expected_revision": obj.revision - 1,
-                    "target": {
-                        "object_id": f"obj-{obj.revision - 1}-0"
-                    },
+                    "target": {"object_id": f"obj-{obj.revision - 1}-0"},
                 },
             ),
             "STALE_PROJECT_STATE",
@@ -294,9 +286,7 @@ def main() -> int:
         )
         overlay_validation = client.validate_batch([overlay_candidate])
         if overlay_validation.get("valid") is not True:
-            raise AssertionError(
-                "expected another-layer creation to remain in scope"
-            )
+            raise AssertionError("expected another-layer creation to remain in scope")
         print(
             "EXPECTED LIMITATION other-layer creation validates; "
             "the object lock does not protect the composed image"
@@ -371,8 +361,7 @@ def main() -> int:
         after = client.get_snapshot()
         if after.revision != before.revision:
             raise AssertionError(
-                f"project changed during probes: {before.revision} -> "
-                f"{after.revision}"
+                f"project changed during probes: {before.revision} -> {after.revision}"
             )
         if [
             (item.object_id, item.name, item.api_locked, item.alias)
@@ -385,9 +374,7 @@ def main() -> int:
         if not client.ping():
             raise AssertionError("pipe did not recover after malformed probes")
 
-    print(
-        "PASS invariant: revision and all snapshot contents are unchanged"
-    )
+    print("PASS invariant: revision and all snapshot contents are unchanged")
     print("PASS recovery: valid ping succeeds after malformed payloads")
     return 0
 

@@ -52,19 +52,14 @@ class TrackInspection:
             )
             or (
                 sampled is not None
-                and (
-                    not isinstance(sampled, (int, float))
-                    or isinstance(sampled, bool)
-                )
+                and (not isinstance(sampled, (int, float)) or isinstance(sampled, bool))
             )
             or (group_name is not None and not isinstance(group_name, str))
             or not isinstance(group_items, list)
             or any(not isinstance(item, str) for item in group_items)
             or not _integer(value.get("group_count"))
             or not _integer(value.get("group_index"))
-            or any(
-                not isinstance(value.get(name), bool) for name in boolean_fields
-            )
+            or any(not isinstance(value.get(name), bool) for name in boolean_fields)
         ):
             raise ProtocolError("Live Bridge returned invalid track information")
         return cls(

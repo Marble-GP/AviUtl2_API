@@ -21,28 +21,66 @@ AviUtl ver.2 uses a text-based project format (.aup2) similar to INI files. This
 - **Live Bridge (experimental)**: Connect to the currently open AviUtl2 project over
   a local Windows named pipe
 
-## What's New in 0.9.5
+## What's New in 0.9.6
 
-0.9.5 is a major Live Bridge usability update. New code should start with
-`LiveProject`; the lower-level `LiveClient` remains compatible and is now the
-documented escape hatch for raw Alias/item access.
+0.9.6 adds a safe stateful API for local `.aup2` work and an explicit bridge
+between the same `EditPlan` and the project open in AviUtl2. Nothing watches or
+saves a project in the background.
 
-- Short operations such as `add_text()`, `add_video()`, `update()`, `find()`,
-  `split()`, `trim()`, and native `render()` are available directly on
-  `LiveProject`.
-- `EditPlan` validates and applies multiple object/media/effect changes as one
-  grouped AviUtl2 GUI Undo unit whenever the host accepts the plan.
-- `effect("glow", ...)` and 19 other semantic Effect profiles use natural units
-  and are shared by Live Bridge and in-memory `.aup2` generation.
-- Cursor placement, free-layer selection, revision/operation IDs, compact
-  snapshots, media duration, and combined MP4 video/audio routing are handled
-  by the high-level API.
-- General text overlap is no longer treated as subtitle overlap unless subtitle
-  layers and `warn`/`error` policy are explicitly requested.
+- `LocalProject.load()` retains unknown sections, keys, third-party Effects and
+  untouched property order while high-level edits patch only known sections.
+- `checkpoint()` creates `project.ai-0001.aup2` without changing the source
+  binding. `save_as()` and `save_source()` use explicit overwrite/hash guards.
+- `SyncSession.apply(plan)` validates a clean Local/Live pair, applies once to
+  AviUtl2, reads native Alias results back, and commits the local in-memory copy.
+  It never writes the `.aup2` file.
+- GUI or local changes are reported as `local_dirty`, `live_dirty`, `diverged`,
+  or `incompatible`; existing differences are not guessed or auto-merged.
+- The 0.9.5 `LiveProject`, semantic Effect profiles, native render, and raw
+  `LiveClient` escape hatch remain compatible.
 
-See the [Agent Quick Start](docs/LIVE_BRIDGE_AGENT_QUICK_START.md), the
+See the compact [Agent API Card](docs/AGENT_API_CARD.md), the
+[Agent Quick Start](docs/LIVE_BRIDGE_AGENT_QUICK_START.md), the
 [complete API manual](docs/LIVE_BRIDGE_AGENT_API_MANUAL.md), and the
-[v0.9.5 release notes](docs/releases/v0.9.5.md).
+[v0.9.6 release notes](docs/releases/v0.9.6.md).
+
+## Safe Python Quick Start
+
+Use the same root imports for local files, an open AviUtl2 window, and explicit
+synchronization. None of these operations saves an `.aup2` implicitly.
+
+```python
+from aviutl2_api import EditPlan, LiveProject, LocalProject, SyncSession, effect
+
+local = LocalProject.load("project.aup2")
+plan = EditPlan().add_text(
+    "第一章",
+    key="title",
+    duration=90,
+    y=-200,
+    effects=[effect("glow", strength=50)],
+)
+
+with LiveProject.connect(pid=46016) as live:
+    sync = SyncSession.bind(local, live)
+    result = sync.apply(plan)  # explicit Live + local-memory mutation
+    native_png = live.render(result.objects["title"].primary.midpoint).png
+
+checkpoint = local.checkpoint()  # project.ai-0001.aup2; source unchanged
+```
+
+For local-only code, immediate methods are shorter and have the same EditPlan
+semantics:
+
+```python
+local = LocalProject.load("project.aup2")
+title = local.add_text("第一章", duration=90, y=-200)
+title = local.update(title.primary, x=120, scale=110)
+local.checkpoint()
+```
+
+Replacing the loaded source is intentionally verbose and must be explicitly
+authorized: `local.save_source(overwrite=True, backup=True)`.
 
 ## Installation
 
@@ -50,7 +88,11 @@ See the [Agent Quick Start](docs/LIVE_BRIDGE_AGENT_QUICK_START.md), the
 pip install aviutl2-api
 ```
 
-## CLI Quick Start
+## Advanced direct-file CLI
+
+The CLI predates `LocalProject` and directly writes the path supplied to its
+editing commands. Agents should prefer the guarded Python workflow above unless
+the user explicitly selected direct CLI mutation.
 
 ```bash
 # Create new project
@@ -87,7 +129,11 @@ aviutl2 fix project.aup2                                           # Detect and 
 aviutl2 fix project.aup2 --dry-run                                 # Check only (no changes)
 ```
 
-## Python API
+## Advanced mutable model API
+
+The parser/model/serializer interface is retained for compatibility and custom
+format work. `serialize_to_file()` writes the requested destination directly;
+it does not provide `LocalProject` checkpoint and hash guards.
 
 ```python
 from aviutl2_api import parse_file, serialize_to_file, to_json
@@ -107,16 +153,16 @@ serialize_to_file(project, "output.aup2")
 json_data = to_json(project)
 ```
 
-### Live Bridge (0.9.5 beta)
+### Live Bridge (0.9.6 beta)
 
 `LiveProject` is the standard entry point for short, revision-safe edits of the
 project currently open in AviUtl2:
 
 ```python
-from aviutl2_api.editing import effect
-from aviutl2_api.live import LiveProject
+from aviutl2_api import LiveProject, effect
 
 with LiveProject.connect(pid=12345) as project:
+    print(project.describe_schema("glow"))
     title = project.add_text(
         "第一章",
         duration=90,
@@ -132,16 +178,33 @@ with LiveProject.connect(pid=12345) as project:
         x=120,
         scale=110,
     )
-    png = project.render(title.primary.midpoint).png
+    preview = project.render_preview(title.primary, max_width=480)
+    image_bytes = preview.data
+    image_mime = preview.mime_type
 ```
+
+For photos, the high-level API can calculate a scene-relative scale and apply
+the common non-mirrored EXIF orientations without rewriting the source file:
+
+```python
+photo = project.add_image(
+    "photo.jpg",
+    fit="contain",
+    apply_exif_orientation=True,
+)
+```
+
+`project.get_snapshot()` always reads fresh state; `project.snapshot` is the
+cached property and is not callable. Use `find_objects()` for partial file/text
+matching and frame-range overlap filters. Explicit placement conflicts expose
+the conflicting object IDs and a suggested free layer.
 
 Omitted `at` uses the GUI cursor frame; omitted `layer` selects the first
 unlocked, collision-free layer from Layer 0. Multiple edits can be validated and
 applied as one GUI Undo unit with `EditPlan`:
 
 ```python
-from aviutl2_api.editing import EditPlan, effect, linear
-from aviutl2_api.live import LiveProject
+from aviutl2_api import EditPlan, LiveProject, effect, linear
 
 plan = EditPlan(sequence="parallel")
 plan.add_video("intro.mp4", key="intro")
@@ -178,6 +241,11 @@ agents should start with
 and open
 [`docs/LIVE_BRIDGE_AGENT_API_MANUAL.md`](docs/LIVE_BRIDGE_AGENT_API_MANUAL.md)
 only when a complete reference or advanced operation is needed.
+
+Generating or saving a PNG does not prove that an AI inspected it. Before an
+agent reports completion, attach `RenderedPreview.data` with its `mime_type` to
+the framework's actual vision input, review several frames or a contact sheet,
+apply corrections, and render again.
 
 External API access starts disabled in every AviUtl2 process. Open that window's
 `設定 > 外部API連携設定...` menu, then check
@@ -406,7 +474,7 @@ still fail closed. Disabled standard Effects use AviUtl2's canonical
 The current official SDK cannot list/create/duplicate/switch scenes or execute
 Undo/Redo. Those capabilities are reported as false, calls fail with
 `SDK_METHOD_UNAVAILABLE`, and the 1.0 release gate remains closed. See
-[`protocol/CAPABILITIES_0.9.5.json`](protocol/CAPABILITIES_0.9.5.json).
+[`protocol/CAPABILITIES_0.9.6.json`](protocol/CAPABILITIES_0.9.6.json).
 
 Render an exact composite frame with the running AviUtl2 process:
 
@@ -613,8 +681,8 @@ to PyPI using a project-scoped API token and creates a GitHub Release containing
 `AviUtl2LiveBridge.aux2` and its SHA-256 checksum:
 
 ```bash
-git tag v0.9.5
-git push origin v0.9.5
+git tag v0.9.6
+git push origin v0.9.6
 ```
 
 The tag without its leading `v` must exactly match `project.version` in
@@ -641,7 +709,7 @@ Start here:
   Default `LiveProject`/`EditPlan` workflow for AI agents
 - [Live Bridge Agent API Manual](docs/LIVE_BRIDGE_AGENT_API_MANUAL.md) -
   Complete Python API, safety rules, errors, and advanced operations
-- [v0.9.5 Release Notes](docs/releases/v0.9.5.md) -
+- [v0.9.6 Release Notes](docs/releases/v0.9.6.md) -
   Upgrade steps, high-level API examples, compatibility, and known constraints
 
 Contributor references:

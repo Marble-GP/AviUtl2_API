@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from aviutl2_api.editing_resolver import text_object as _text_object
 from aviutl2_api.models import (
     AnimatedValue,
-    Effect,
     StaticValue,
     TimelineObject,
 )
@@ -84,9 +84,7 @@ class ItemUpdate:
                 or "\r" in field_value
                 or "\n" in field_value
             ):
-                raise ValueError(
-                    f"{field_name} must be a non-empty single-line string"
-                )
+                raise ValueError(f"{field_name} must be a non-empty single-line string")
 
     def to_wire(self) -> dict[str, str]:
         return {
@@ -109,9 +107,7 @@ def _format_item_value(
         formatted = str(value)
     if "\x00" in formatted:
         raise ValueError("item value must not contain NUL characters")
-    return formatted.replace("\r\n", "\\n").replace("\r", "\\n").replace(
-        "\n", "\\n"
-    )
+    return formatted.replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n")
 
 
 def make_text_object(
@@ -125,40 +121,16 @@ def make_text_object(
     size: float = 34.0,
     color: str = "ffffff",
 ) -> TimelineObject:
-    """Build a text object using AviUtl2's native effect/property names."""
-    normalized_color = color.removeprefix("#").lower()
-    if len(normalized_color) != 6 or any(
-        character not in "0123456789abcdef"
-        for character in normalized_color
-    ):
-        raise ValueError("color must be a six-digit hexadecimal RGB value")
-    if length < 1:
-        raise ValueError("length must be positive")
-
-    return TimelineObject(
-        object_id=0,
+    """Build a native text object using the shared semantic template."""
+    return _text_object(
+        text,
         layer=layer,
-        frame_start=frame,
-        frame_end=frame + length - 1,
-        effects=[
-            Effect(
-                effect_id=0,
-                name="テキスト",
-                properties={
-                    "サイズ": StaticValue(float(size)),
-                    "文字色": normalized_color,
-                    "テキスト": text,
-                },
-            ),
-            Effect(
-                effect_id=1,
-                name="標準描画",
-                properties={
-                    "X": StaticValue(float(x)),
-                    "Y": StaticValue(float(y)),
-                },
-            ),
-        ],
+        frame=frame,
+        length=length,
+        x=x,
+        y=y,
+        size=size,
+        color=color,
     )
 
 

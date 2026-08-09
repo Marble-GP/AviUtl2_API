@@ -53,9 +53,7 @@ def _all_catalog_effects(client: LiveClient) -> dict[str, set[str]]:
     while True:
         page = client.get_effect_catalog(start=start, count=128)
         for effect in page.effects:
-            effects[effect.name] = {
-                item.name for item in effect.items
-            }
+            effects[effect.name] = {item.name for item in effect.items}
         if page.next_start is None:
             return effects
         start = page.next_start
@@ -78,11 +76,7 @@ def apply_common_effect(
     if not values:
         raise ValueError("at least one effect item value is required")
     catalog = _all_catalog_effects(client)
-    candidates = (
-        (effect_name,)
-        if effect_name is not None
-        else _CANDIDATES[semantic]
-    )
+    candidates = (effect_name,) if effect_name is not None else _CANDIDATES[semantic]
     available = [name for name in candidates if name in catalog]
     if len(available) != 1:
         raise ValueError(
@@ -103,25 +97,19 @@ def apply_common_effect(
         effect
         for effect in inspection.effects
         if effect.name == selected
-        and requested_items.issubset(
-            {item.name for item in effect.items}
-        )
+        and requested_items.issubset({item.name for item in effect.items})
     ]
     if len(existing) > 1:
         raise ValueError(
             "effect_name is ambiguous; use object.inspect selectors directly"
         )
-    updates = tuple(
-        ItemUpdate(selected, item, value)
-        for item, value in values.items()
-    )
+    updates = tuple(ItemUpdate(selected, item, value) for item, value in values.items())
     if existing:
         selector = existing[0].selector
         result = client.set_items(
             obj,
             tuple(
-                ItemUpdate(selector, update.item, update.value)
-                for update in updates
+                ItemUpdate(selector, update.item, update.value) for update in updates
             ),
             timeout=timeout,
         )
@@ -132,10 +120,7 @@ def apply_common_effect(
             False,
             result,
         )
-    raw_items = {
-        update.item: update.to_wire()["value"]
-        for update in updates
-    }
+    raw_items = {update.item: update.to_wire()["value"] for update in updates}
     result = client.add_effect(
         obj,
         selected,

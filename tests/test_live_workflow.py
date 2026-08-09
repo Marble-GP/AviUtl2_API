@@ -12,7 +12,7 @@ from aviutl2_api.live.catalog import (
     EffectCatalogPage,
     EffectFlags,
 )
-from aviutl2_api.live.frame import RenderedFrame, make_contact_sheet
+from aviutl2_api.live.frame import RenderedFrame, make_contact_sheet, make_preview
 from aviutl2_api.live.inspection import (
     EffectInspection,
     ItemInspection,
@@ -115,6 +115,27 @@ def test_contact_sheet_is_in_memory_png() -> None:
     assert sheet.frames == (0, 1, 2)
     assert sheet.png.startswith(b"\x89PNG\r\n\x1a\n")
     assert sheet.width == 320
+
+
+def test_rendered_preview_is_small_and_agent_transport_ready() -> None:
+    frame = RenderedFrame(
+        frame=42,
+        width=1600,
+        height=900,
+        scene_id=1,
+        revision=22,
+        sha256="0" * 64,
+        png=_png((12, 34, 56)),
+    )
+
+    preview = make_preview(frame, max_width=8, format="jpg", quality=80)
+
+    assert preview.frame == 42
+    assert (preview.width, preview.height) == (8, 5)
+    assert preview.mime_type == "image/jpeg"
+    assert preview.data.startswith(b"\xff\xd8")
+    assert preview.to_data_url().startswith("data:image/jpeg;base64,")
+    assert preview.sha256 != frame.sha256
 
 
 def test_media_creation_returns_sdk_generated_group() -> None:

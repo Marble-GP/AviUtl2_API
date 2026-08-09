@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from aviutl2_api.models import TimelineObject
@@ -283,7 +284,11 @@ def _apply_bezier_timing(t: float, param: str) -> float:
             # p0 = 0, p3 = 1 (start and end)
             # p1 and p2 are control points
             p1 = float(bezier_data[0]) if bezier_data[0] else 0.25
-            p2 = float(bezier_data[2]) if len(bezier_data) > 2 and bezier_data[2] else 0.75
+            p2 = (
+                float(bezier_data[2])
+                if len(bezier_data) > 2 and bezier_data[2]
+                else 0.75
+            )
 
             # Simple cubic bezier evaluation for timing
             return _cubic_bezier(t, 0, p1, p2, 1)
@@ -304,11 +309,13 @@ def _cubic_bezier(t: float, p0: float, p1: float, p2: float, p3: float) -> float
         Bezier curve value at t
     """
     mt = 1 - t
-    return mt * mt * mt * p0 + 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t * t * t * p3
+    return (
+        mt * mt * mt * p0 + 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t * t * t * p3
+    )
 
 
 def get_property_value_at_frame(
-    properties: dict,
+    properties: Mapping[str, Any],
     key: str,
     frame: int,
     obj: TimelineObject,
@@ -333,7 +340,7 @@ def get_property_value_at_frame(
 
 
 def get_property_string(
-    properties: dict,
+    properties: Mapping[str, Any],
     key: str,
     default: str = "",
 ) -> str:

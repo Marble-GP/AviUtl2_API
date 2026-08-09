@@ -21,6 +21,7 @@ from aviutl2_api.editing import EFFECT_PROFILES, effect, linear, native_effect
 from aviutl2_api.effect_profiles import (
     EffectProfileUnavailableError,
     available_effect_profiles,
+    describe_effect_profile,
     resolve_effect,
 )
 from aviutl2_api.models import Effect, Project, Scene, StaticValue, TimelineObject
@@ -115,6 +116,23 @@ def test_semantic_values_use_natural_units_and_strict_enums() -> None:
         resolve_effect(effect("glow", guessed_strength=1))
     with pytest.raises(ValueError, match="unknown effect profile"):
         effect("not-a-profile")
+
+
+def test_effect_schema_is_machine_readable_without_guessing_ranges() -> None:
+    glow = describe_effect_profile("glow")
+    parameters = glow["parameters"]
+
+    assert glow["native_name"] == "グロー"
+    assert glow["scope"] == "video"
+    assert isinstance(parameters, dict)
+    assert parameters["shape"]["values"] == ("cross4", "cross6", "circle")
+    assert parameters["shape"]["default"] == "cross4"
+    assert parameters["color"]["unit"] == "#RRGGBB"
+    assert "minimum" not in parameters["strength"]
+
+    opacity = describe_effect_profile("drop_shadow")["parameters"]["opacity"]
+    assert opacity["minimum"] == 0.0
+    assert opacity["maximum"] == 1.0
 
 
 def test_native_effect_is_explicitly_unverified() -> None:

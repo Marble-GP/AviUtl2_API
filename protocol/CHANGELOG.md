@@ -1,5 +1,25 @@
 # Live Bridge protocol changelog
 
+## Protocol v1 - plugin/client 0.9.6
+
+- Added nullable `project_file_path` to `project.get_info`. The value is copied
+  from the official project lifecycle callback and may be null for an unsaved
+  or not-yet-observed project.
+- Added sequenced `project_loaded` and `project_saving` event types.
+  `project_saving` is a pre-save observation and is explicitly not a success
+  receipt. Callback-scoped metadata is copied; no SDK pointer is retained.
+- Added capability flags `local_project`, `lossless_aup2_document`,
+  `guarded_checkpoint_save`, `explicit_plan_sync`,
+  `project_path_observation`, and `project_lifecycle_notifications`.
+- Added Python `LocalProject` and `SyncSession`. They reuse additive protocol v1
+  `EditPlan` methods; no project open/save wire command or automatic
+  synchronization was introduced.
+- Unified the Python Local/Live/Sync query surface, structured high-level sync
+  recovery errors, and documented the safe root-import workflow in a compact
+  Agent API Card. These are Python workflow additions and add no wire method.
+- Protocol v1 remains backward compatible. Old clients ignore the added
+  `project.get_info` field and event names.
+
 ## Protocol v1 - plugin/client 0.9.5
 
 - Added the backend-neutral `effect(profile, ...)` and `native_effect()`

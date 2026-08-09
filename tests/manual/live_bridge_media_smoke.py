@@ -36,8 +36,7 @@ def create_test_wave(path: Path, *, seconds: int = 3) -> None:
         frames = bytearray()
         for index in range(sample_rate * seconds):
             value = int(
-                amplitude
-                * math.sin(2.0 * math.pi * frequency * index / sample_rate)
+                amplitude * math.sin(2.0 * math.pi * frequency * index / sample_rate)
             )
             frames.extend(struct.pack("<h", value))
         output.writeframes(frames)
@@ -53,9 +52,7 @@ def objects_in_range(
     return [
         obj
         for obj in client.get_snapshot().objects
-        if obj.layer == layer
-        and obj.frame_start <= end
-        and obj.frame_end >= start
+        if obj.layer == layer and obj.frame_start <= end and obj.frame_end >= start
     ]
 
 
@@ -115,9 +112,7 @@ def main() -> int:
     if not args.frame < args.split_frame <= end:
         raise ValueError("split frame must be inside the requested range")
 
-    path = Path(tempfile.gettempdir()) / (
-        f"aviutl2-live-media-smoke-{args.pid}.wav"
-    )
+    path = Path(tempfile.gettempdir()) / (f"aviutl2-live-media-smoke-{args.pid}.wav")
     if path.exists() and path.stat().st_size == 288_044:
         emit("wave_reused", bytes=path.stat().st_size, path=str(path))
     else:
@@ -150,10 +145,7 @@ def main() -> int:
                     frame=args.frame,
                     length=args.length,
                 )
-                if (
-                    created.frame_start != args.frame
-                    or created.frame_end != end
-                ):
+                if created.frame_start != args.frame or created.frame_end != end:
                     raise RuntimeError(f"unexpected media range: {created!r}")
                 source = objects_in_range(
                     client,

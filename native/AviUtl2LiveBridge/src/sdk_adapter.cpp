@@ -4927,6 +4927,16 @@ void palette_details_callback(
 HostSdkAdapter::HostSdkAdapter(EDIT_HANDLE* edit_handle) noexcept
     : edit_handle_(edit_handle) {}
 
+void HostSdkAdapter::observe_project_file_path(
+    const std::wstring_view path) noexcept {
+    try {
+        std::scoped_lock lock(project_path_mutex_);
+        project_file_path_ = wide_to_utf8(path);
+    } catch (...) {
+        // Lifecycle observation must never interfere with host load/save.
+    }
+}
+
 void HostSdkAdapter::set_stopping(
     const bool stopping) noexcept {
     stopping_.store(stopping, std::memory_order_release);
@@ -4984,6 +4994,11 @@ ProjectInfoResult HostSdkAdapter::get_project_info() noexcept {
         };
     }
 
+    std::string project_file_path;
+    {
+        std::scoped_lock lock(project_path_mutex_);
+        project_file_path = project_file_path_;
+    }
     return ProjectInfoResult{
         true,
         ProjectInfo{
@@ -4997,6 +5012,7 @@ ProjectInfoResult HostSdkAdapter::get_project_info() noexcept {
             sdk_info.layer,
             sdk_info.frame_max,
             sdk_info.layer_max,
+            std::move(project_file_path),
         },
         {},
         {},

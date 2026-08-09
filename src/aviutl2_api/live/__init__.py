@@ -1,6 +1,10 @@
 """Live connection support for the currently open AviUtl2 project."""
 
-from aviutl2_api.editing import AppliedEffect
+from aviutl2_api.editing import (
+    AppliedEffect,
+    PlacementConflictError,
+    ValidationIssue,
+)
 
 from .alias import serialize_object_alias
 from .audio import AudioAnalysis, RenderedAudio, analyze_pcm_f32le
@@ -34,7 +38,9 @@ from .events import BridgeEvent, EventWatchResult, SessionInfo
 from .frame import (
     ContactSheet,
     RenderedFrame,
+    RenderedPreview,
     make_contact_sheet,
+    make_preview,
     review_sample_frames,
 )
 from .inspection import (
@@ -122,11 +128,13 @@ __all__ = [
     "ObjectGroup",
     "ObjectSection",
     "ObjectSections",
+    "PlacementConflictError",
     "ProjectSnapshot",
     "PreflightIssue",
     "PreflightReport",
     "ProtocolError",
     "RenderedFrame",
+    "RenderedPreview",
     "RenderedAudio",
     "ReviewBundle",
     "SceneInfo",
@@ -141,11 +149,13 @@ __all__ = [
     "TimelineTransactionCommand",
     "TransactionReceipt",
     "UndoReceipt",
+    "ValidationIssue",
     "discover_instances",
     "analyze_pcm_f32le",
     "apply_common_effect",
     "make_text_object",
     "make_contact_sheet",
+    "make_preview",
     "load_subtitles",
     "parse_srt",
     "parse_webvtt",

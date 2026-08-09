@@ -24,9 +24,7 @@ _INFINITE = 0xFFFFFFFF
 _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 _ULONG_PTR = (
-    ctypes.c_ulonglong
-    if ctypes.sizeof(ctypes.c_void_p) == 8
-    else ctypes.c_ulong
+    ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
 )
 
 

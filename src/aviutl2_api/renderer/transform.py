@@ -81,7 +81,11 @@ def apply_transform(
     # 2. Apply 3D rotations as 2D perspective projections
     if x_rotation != 0 or y_rotation != 0:
         current, current_w, current_h = _apply_3d_rotation(
-            current, x_rotation, y_rotation, center_x * scale_factor, center_y * scale_factor
+            current,
+            x_rotation,
+            y_rotation,
+            center_x * scale_factor,
+            center_y * scale_factor,
         )
 
     # 3. Apply Z-axis rotation (standard 2D rotation)
@@ -124,22 +128,22 @@ def _apply_z_rotation(
     # Get rotation matrix
     # Note: OpenCV uses positive angles for counter-clockwise rotation
     # AviUtl uses positive for clockwise, so we negate
-    M = cv2.getRotationMatrix2D((cx, cy), -rotation, 1.0)
+    matrix = cv2.getRotationMatrix2D((cx, cy), -rotation, 1.0)
 
     # Calculate new bounding box size
-    cos_a = abs(M[0, 0])
-    sin_a = abs(M[0, 1])
+    cos_a = abs(matrix[0, 0])
+    sin_a = abs(matrix[0, 1])
     new_w = int(h * sin_a + w * cos_a)
     new_h = int(h * cos_a + w * sin_a)
 
     # Adjust translation to keep content centered
-    M[0, 2] += (new_w - w) / 2
-    M[1, 2] += (new_h - h) / 2
+    matrix[0, 2] += (new_w - w) / 2
+    matrix[1, 2] += (new_h - h) / 2
 
     # Apply rotation with transparent background
     rotated = cv2.warpAffine(
         image,
-        M,
+        matrix,
         (new_w, new_h),
         flags=cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_CONSTANT,
@@ -216,26 +220,32 @@ def _apply_x_axis_rotation(
     offset = w * (1 - abs(cos_x)) / 4
 
     # Source points (original corners)
-    pts1 = np.float32([[0, 0], [w, 0], [0, h], [w, h]])
+    pts1 = np.asarray([[0, 0], [w, 0], [0, h], [w, h]], dtype=np.float32)
 
     # Destination points based on rotation direction
     if rotation > 0:
         # Tilting forward: top edge gets smaller
-        pts2 = np.float32([[offset, 0], [w - offset, 0], [0, h], [w, h]])
+        pts2 = np.asarray(
+            [[offset, 0], [w - offset, 0], [0, h], [w, h]],
+            dtype=np.float32,
+        )
     else:
         # Tilting backward: bottom edge gets smaller
-        pts2 = np.float32([[0, 0], [w, 0], [offset, h], [w - offset, h]])
+        pts2 = np.asarray(
+            [[0, 0], [w, 0], [offset, h], [w - offset, h]],
+            dtype=np.float32,
+        )
 
     # Also adjust height based on angle
     new_h = max(1, int(h * abs(cos_x)))
 
     # Get perspective transform matrix
-    M = cv2.getPerspectiveTransform(pts1, pts2)
+    matrix = cv2.getPerspectiveTransform(pts1, pts2)
 
     # Apply transform
     result = cv2.warpPerspective(
         image,
-        M,
+        matrix,
         (w, h),
         flags=cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_CONSTANT,
@@ -276,23 +286,29 @@ def _apply_y_axis_rotation(
     offset = h * (1 - abs(cos_y)) / 4
 
     # Source points (original corners)
-    pts1 = np.float32([[0, 0], [w, 0], [0, h], [w, h]])
+    pts1 = np.asarray([[0, 0], [w, 0], [0, h], [w, h]], dtype=np.float32)
 
     # Destination points based on rotation direction
     if rotation > 0:
         # Tilting right: left edge gets smaller
-        pts2 = np.float32([[0, offset], [w, 0], [0, h - offset], [w, h]])
+        pts2 = np.asarray(
+            [[0, offset], [w, 0], [0, h - offset], [w, h]],
+            dtype=np.float32,
+        )
     else:
         # Tilting left: right edge gets smaller
-        pts2 = np.float32([[0, 0], [w, offset], [0, h], [w, h - offset]])
+        pts2 = np.asarray(
+            [[0, 0], [w, offset], [0, h], [w, h - offset]],
+            dtype=np.float32,
+        )
 
     # Get perspective transform matrix
-    M = cv2.getPerspectiveTransform(pts1, pts2)
+    matrix = cv2.getPerspectiveTransform(pts1, pts2)
 
     # Apply transform
     result = cv2.warpPerspective(
         image,
-        M,
+        matrix,
         (w, h),
         flags=cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_CONSTANT,

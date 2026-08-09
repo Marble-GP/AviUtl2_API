@@ -18,12 +18,13 @@ raw item、完全Alias、明示revision、未ラップendpointが必要な場合
 
 | 目的 | 読む文書 |
 |---|---|
+| LLMへ最小API契約を渡す | `docs/AGENT_API_CARD.md` |
 | Live Bridgeを使って編集する | `docs/LIVE_BRIDGE_AGENT_QUICK_START.md` |
 | Python型、全method、error、制約を調べる | `docs/LIVE_BRIDGE_AGENT_API_MANUAL.md`の該当節 |
 | Named Pipe client/pluginを実装する | `docs/LIVE_BRIDGE_PROTOCOL.md` |
 | native pluginをbuild・試験する | `docs/LIVE_BRIDGE_DEVELOPMENT.md` |
 | `.aup2` parser/serializerを変更する | `docs/aup2_format_specification.md` |
-| 0.9.5の変更・移行を説明する | `docs/releases/v0.9.5.md` |
+| 0.9.6の変更・移行を説明する | `docs/releases/v0.9.6.md` |
 | CLIを使う | `aviutl2 --help`と各subcommandの`--help` |
 
 ## Live Bridgeの必須ルール
@@ -75,8 +76,13 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-変更したPython fileはruff、typed moduleはmypy strictを通します。legacy CLI/preview
-rendererには既存lint baselineがあるため、未変更部分をrelease結果へ混同しません。
+release前にPython package全体、tests、examplesへ次のquality gateを通します。
+
+```powershell
+.\.venv\Scripts\python.exe -m ruff format --check src tests examples
+.\.venv\Scripts\python.exe -m ruff check src tests examples
+.\.venv\Scripts\python.exe -m mypy --strict src/aviutl2_api
+```
 
 Native Release:
 

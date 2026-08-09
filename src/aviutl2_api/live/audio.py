@@ -63,9 +63,7 @@ class RenderedAudio:
     ) -> Path:
         destination = Path(path).expanduser().resolve()
         if destination.exists() and not overwrite:
-            raise FileExistsError(
-                f"refusing to overwrite existing PCM: {destination}"
-            )
+            raise FileExistsError(f"refusing to overwrite existing PCM: {destination}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(self.pcm_f32le)
         return destination
@@ -90,13 +88,7 @@ def _biquad(
     y1 = 0.0
     y2 = 0.0
     for sample in samples:
-        value = (
-            b0 * sample
-            + b1 * x1
-            + b2 * x2
-            - a1 * y1
-            - a2 * y2
-        )
+        value = b0 * sample + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
         output.append(value)
         x2, x1 = x1, sample
         y2, y1 = y1, value
@@ -133,43 +125,13 @@ def _high_shelf_coefficients(
     sine = math.sin(omega)
     alpha = sine / (2.0 * quality)
     root = 2.0 * math.sqrt(amplitude) * alpha
-    a0 = (
-        amplitude
-        + 1.0
-        - (amplitude - 1.0) * cosine
-        + root
-    )
+    a0 = amplitude + 1.0 - (amplitude - 1.0) * cosine + root
     return (
-        amplitude
-        * (
-            amplitude
-            + 1.0
-            + (amplitude - 1.0) * cosine
-            + root
-        )
-        / a0,
-        -2.0
-        * amplitude
-        * (amplitude - 1.0 + (amplitude + 1.0) * cosine)
-        / a0,
-        amplitude
-        * (
-            amplitude
-            + 1.0
-            + (amplitude - 1.0) * cosine
-            - root
-        )
-        / a0,
-        2.0
-        * (amplitude - 1.0 - (amplitude + 1.0) * cosine)
-        / a0,
-        (
-            amplitude
-            + 1.0
-            - (amplitude - 1.0) * cosine
-            - root
-        )
-        / a0,
+        amplitude * (amplitude + 1.0 + (amplitude - 1.0) * cosine + root) / a0,
+        -2.0 * amplitude * (amplitude - 1.0 + (amplitude + 1.0) * cosine) / a0,
+        amplitude * (amplitude + 1.0 + (amplitude - 1.0) * cosine - root) / a0,
+        2.0 * (amplitude - 1.0 - (amplitude + 1.0) * cosine) / a0,
+        (amplitude + 1.0 - (amplitude - 1.0) * cosine - root) / a0,
     )
 
 
@@ -218,24 +180,24 @@ def _integrated_loudness(
     energies: list[float] = []
     for start in range(0, len(left) - block_size + 1, step):
         stop = start + block_size
-        energy = sum(
-            sample * sample
-            for channel in filtered_channels
-            for sample in channel[start:stop]
-        ) / block_size
+        energy = (
+            sum(
+                sample * sample
+                for channel in filtered_channels
+                for sample in channel[start:stop]
+            )
+            / block_size
+        )
         energies.append(energy)
     absolute = [
         energy
         for energy in energies
-        if energy > 0.0
-        and -0.691 + 10.0 * math.log10(energy) >= -70.0
+        if energy > 0.0 and -0.691 + 10.0 * math.log10(energy) >= -70.0
     ]
     if not absolute:
         return None
     preliminary_energy = sum(absolute) / len(absolute)
-    relative_gate = (
-        -0.691 + 10.0 * math.log10(preliminary_energy) - 10.0
-    )
+    relative_gate = -0.691 + 10.0 * math.log10(preliminary_energy) - 10.0
     gated = [
         energy
         for energy in absolute
@@ -283,20 +245,14 @@ def analyze_pcm_f32le(
             integrated_lufs=None,
         )
     peak = max(abs(value) for value in finite)
-    rms = math.sqrt(
-        sum(value * value for value in finite) / len(finite)
-    )
+    rms = math.sqrt(sum(value * value for value in finite) / len(finite))
     silence_threshold = 10.0 ** (silence_threshold_dbfs / 20.0)
     left = [
-        float(values[index])
-        if math.isfinite(values[index])
-        else 0.0
+        float(values[index]) if math.isfinite(values[index]) else 0.0
         for index in range(0, len(values), 2)
     ]
     right = [
-        float(values[index])
-        if math.isfinite(values[index])
-        else 0.0
+        float(values[index]) if math.isfinite(values[index]) else 0.0
         for index in range(1, len(values), 2)
     ]
     return AudioAnalysis(
@@ -304,15 +260,9 @@ def analyze_pcm_f32le(
         peak_dbfs=_dbfs(peak),
         rms=rms,
         rms_dbfs=_dbfs(rms),
-        clipping_samples=sum(
-            abs(value) >= clipping_threshold
-            for value in finite
-        ),
+        clipping_samples=sum(abs(value) >= clipping_threshold for value in finite),
         non_finite_samples=non_finite,
-        silence_ratio=sum(
-            abs(value) < silence_threshold
-            for value in finite
-        )
+        silence_ratio=sum(abs(value) < silence_threshold for value in finite)
         / len(finite),
         integrated_lufs=_integrated_loudness(
             left,

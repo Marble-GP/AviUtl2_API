@@ -65,9 +65,7 @@ class ProjectSnapshot:
         parsed: list[SnapshotObject] = []
         for value in objects:
             if not isinstance(value, dict):
-                raise ProtocolError(
-                    "Live Bridge returned an invalid snapshot object"
-                )
+                raise ProtocolError("Live Bridge returned an invalid snapshot object")
             object_id = value.get("object_id")
             layer = value.get("layer")
             frame_start = value.get("frame_start")
@@ -91,9 +89,7 @@ class ProjectSnapshot:
                 or (alias is not None and not isinstance(alias, str))
                 or not isinstance(api_locked, bool)
             ):
-                raise ProtocolError(
-                    "Live Bridge returned an invalid snapshot object"
-                )
+                raise ProtocolError("Live Bridge returned an invalid snapshot object")
             parsed.append(
                 SnapshotObject(
                     object_id=object_id,

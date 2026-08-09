@@ -112,7 +112,7 @@ Returns `{"pong": true}`.
 ### `system.get_capabilities`
 
 Returns the protocol version, maximum payload, supported method names, native
-versus verified-Alias backends, release-gate blockers, and the four official SDK
+versus verified-Alias backends, release-gate blockers, and official SDK
 notification names.
 
 ### `session.open` / `event.watch`
@@ -126,15 +126,29 @@ cached result, while reusing the ID for another payload returns
 `after_sequence`, `timeout_ms`, and an optional `types` filter. Overflow sets
 `resync_required`; events are only change signals, so the client must then fetch
 a fresh snapshot. SDK callbacks only append event metadata and never call back
-into the SDK.
+into an edit/read section. In 0.9.6 the journal also includes
+`project_loaded` and `project_saving`. The latter is called before AviUtl2 saves
+and is not a save-success notification. The callback-scoped project path is
+copied immediately and no SDK-owned pointer is retained.
 
 ### `project.get_info`
 
-Returns current scene resolution, frame rate numerator/scale, sample rate, cursor,
-maximum frame/layer, scene ID, and edit state. It uses the SDK's locking
-`EDIT_HANDLE::get_edit_info()` API through `HostSdkAdapter`.
+Returns current scene resolution, frame rate numerator/scale, sample rate,
+cursor, maximum frame/layer, scene ID, edit state, and nullable
+`project_file_path`. It uses the SDK's locking `EDIT_HANDLE::get_edit_info()`
+API through `HostSdkAdapter`; the path is the last lifecycle callback
+observation and may be null for an unsaved or not-yet-observed project.
 
 It does not return or retain SDK handles or SDK-owned pointers.
+
+### Local files and explicit synchronization
+
+`LocalProject` and `SyncSession` are Python APIs, not new wire methods.
+`SyncSession.apply()` compiles the same `EditPlan` into existing
+`edit.plan.validate/apply` requests, then reads a fresh Alias-bearing snapshot
+and commits the local in-memory clone. It neither asks AviUtl2 to save nor
+writes a `.aup2` file. Existing Local/Live differences are reported and never
+automatically merged.
 
 ### `effect.catalog`
 

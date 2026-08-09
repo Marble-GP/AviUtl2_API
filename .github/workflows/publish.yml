@@ -70,6 +70,15 @@ jobs:
             exit 1
           fi
 
+      - name: Check Python formatting
+        run: python -m ruff format --check src tests examples
+
+      - name: Run Ruff lint
+        run: python -m ruff check src tests examples
+
+      - name: Run strict mypy
+        run: python -m mypy --strict src/aviutl2_api
+
       - name: Run Python tests
         run: python -m pytest -q
 

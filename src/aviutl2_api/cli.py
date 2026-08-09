@@ -9,6 +9,7 @@ import platform
 import re
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Literal
 
 import click
 
@@ -23,10 +24,19 @@ from aviutl2_api import (
     serialize_to_file,
     to_json,
 )
-from aviutl2_api.editing import effect, native_effect
+from aviutl2_api.editing import (
+    EffectDefinition,
+    EffectParameterValue,
+    EffectSpec,
+    effect,
+    native_effect,
+)
 from aviutl2_api.effect_profiles import legacy_compatibility_effect
 from aviutl2_api.models import Effect
 from aviutl2_api.models.values import AnimatedValue, StaticValue
+
+if TYPE_CHECKING:
+    from aviutl2_api.renderer import FrameBuffer
 
 
 def safe_echo(message: str, err: bool = False) -> None:
@@ -309,11 +319,13 @@ def check(file: Path, at_frame: int, to_frame: int, layer: int, scene: int) -> N
 
     if conflicts:
         safe_echo(
-            f"配置不可: レイヤー {layer} フレーム {at_frame}-{to_frame} には衝突があります:"
+            f"配置不可: レイヤー {layer} "
+            f"フレーム {at_frame}-{to_frame} には衝突があります:"
         )
         for obj in conflicts:
             safe_echo(
-                f"  - ID {obj.object_id}: {obj.object_type} (フレーム {obj.frame_start}-{obj.frame_end})"
+                f"  - ID {obj.object_id}: {obj.object_type} "
+                f"(フレーム {obj.frame_start}-{obj.frame_end})"
             )
     else:
         safe_echo(f"配置可能: レイヤー {layer} フレーム {at_frame}-{to_frame}")
@@ -411,7 +423,8 @@ def add_text(
                 and obj.frame_end >= from_frame
             ):
                 raise click.ClickException(
-                    f"配置不可: レイヤー {actual_layer} フレーム {from_frame}-{to_frame} には"
+                    f"配置不可: レイヤー {actual_layer} "
+                    f"フレーム {from_frame}-{to_frame} には"
                     f"既にオブジェクト(ID {obj.object_id})が存在します。"
                 )
 
@@ -581,7 +594,8 @@ def add_shape(
                 and obj.frame_end >= from_frame
             ):
                 raise click.ClickException(
-                    f"配置不可: レイヤー {actual_layer} フレーム {from_frame}-{to_frame} には"
+                    f"配置不可: レイヤー {actual_layer} "
+                    f"フレーム {from_frame}-{to_frame} には"
                     f"既にオブジェクト(ID {obj.object_id})が存在します。"
                 )
 
@@ -663,7 +677,8 @@ def add_shape(
 
     layer_info = f"レイヤー {actual_layer}" + (" (auto)" if auto_layer else "")
     safe_echo(
-        f"図形追加: ID {new_id}, {shape_name}, {layer_info}, フレーム {from_frame}-{to_frame}"
+        f"図形追加: ID {new_id}, {shape_name}, {layer_info}, "
+        f"フレーム {from_frame}-{to_frame}"
     )
     safe_echo(f"  保存先: {save_path}")
 
@@ -747,7 +762,8 @@ def add_audio(
                 and obj.frame_end >= from_frame
             ):
                 raise click.ClickException(
-                    f"配置不可: レイヤー {actual_layer} フレーム {from_frame}-{to_frame} には"
+                    f"配置不可: レイヤー {actual_layer} "
+                    f"フレーム {from_frame}-{to_frame} には"
                     f"既にオブジェクト(ID {obj.object_id})が存在します。"
                 )
 
@@ -887,7 +903,8 @@ def add_video(
                 and obj.frame_end >= from_frame
             ):
                 raise click.ClickException(
-                    f"配置不可: レイヤー {actual_layer} フレーム {from_frame}-{to_frame} には"
+                    f"配置不可: レイヤー {actual_layer} "
+                    f"フレーム {from_frame}-{to_frame} には"
                     f"既にオブジェクト(ID {obj.object_id})が存在します。"
                 )
 
@@ -1037,7 +1054,8 @@ def add_image(
                 and obj.frame_end >= from_frame
             ):
                 raise click.ClickException(
-                    f"配置不可: レイヤー {actual_layer} フレーム {from_frame}-{to_frame} には"
+                    f"配置不可: レイヤー {actual_layer} "
+                    f"フレーム {from_frame}-{to_frame} には"
                     f"既にオブジェクト(ID {obj.object_id})が存在します。"
                 )
 
@@ -1427,7 +1445,8 @@ def modify_object(
                     )
                     obj_type = moved_obj.object_type if moved_obj else "不明"
                     safe_echo(
-                        f"  オブジェクト {moved_id} ({obj_type}) をレイヤー {old_l} → {new_l} に移動",
+                        f"  オブジェクト {moved_id} ({obj_type}) を"
+                        f"レイヤー {old_l} → {new_l} に移動",
                         err=True,
                     )
             except RuntimeError as e:
@@ -1436,8 +1455,10 @@ def modify_object(
             # Non-force mode: just warn
             for other_obj in collisions:
                 safe_echo(
-                    f"警告: レイヤー {layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
-                    f"オブジェクト {other_obj.object_id} ({other_obj.object_type}) が存在します。",
+                    f"警告: レイヤー {layer} のフレーム "
+                    f"{other_obj.frame_start}-{other_obj.frame_end} に "
+                    f"オブジェクト {other_obj.object_id} "
+                    f"({other_obj.object_type}) が存在します。",
                     err=True,
                 )
 
@@ -1473,7 +1494,8 @@ def modify_object(
                         )
                         obj_type = moved_obj.object_type if moved_obj else "不明"
                         safe_echo(
-                            f"  オブジェクト {moved_id} ({obj_type}) をレイヤー {old_l} → {new_l} に移動",
+                            f"  オブジェクト {moved_id} ({obj_type}) を"
+                            f"レイヤー {old_l} → {new_l} に移動",
                             err=True,
                         )
                 except RuntimeError as e:
@@ -1482,8 +1504,10 @@ def modify_object(
                 # Non-force mode: just warn
                 for other_obj in collisions:
                     safe_echo(
-                        f"警告: レイヤー {target_layer} のフレーム {other_obj.frame_start}-{other_obj.frame_end} に "
-                        f"オブジェクト {other_obj.object_id} ({other_obj.object_type}) が存在します。",
+                        f"警告: レイヤー {target_layer} のフレーム "
+                        f"{other_obj.frame_start}-{other_obj.frame_end} に "
+                        f"オブジェクト {other_obj.object_id} "
+                        f"({other_obj.object_type}) が存在します。",
                         err=True,
                     )
 
@@ -1614,7 +1638,8 @@ def copy_object(
                 and obj.frame_end >= new_start
             ):
                 raise click.ClickException(
-                    f"配置不可: レイヤー {actual_layer} フレーム {new_start}-{new_end} には"
+                    f"配置不可: レイヤー {actual_layer} "
+                    f"フレーム {new_start}-{new_end} には"
                     f"既にオブジェクト(ID {obj.object_id})が存在します。"
                 )
 
@@ -1743,19 +1768,19 @@ def filter_add(
 
     color_value = None if color is None else f"#{color.removeprefix('#')}"
     amount = strength
+    spec: EffectDefinition
     try:
         if filter_type == "blur":
-            spec = effect(
-                "blur",
-                **({} if amount is None else {"radius_px": amount}),
+            spec = (
+                effect("blur") if amount is None else effect("blur", radius_px=amount)
             )
         elif filter_type == "glow":
-            parameters: dict[str, object] = {}
+            parameters: dict[str, EffectParameterValue] = {}
             if amount is not None:
                 parameters["strength"] = amount
             if color_value is not None:
                 parameters["color"] = color_value
-            spec = effect("glow", **parameters)
+            spec = EffectSpec("glow", parameters)
         elif filter_type == "fade":
             seconds = 0.5 if amount is None else amount
             spec = effect("fade", in_seconds=seconds, out_seconds=seconds)
@@ -1765,7 +1790,7 @@ def filter_add(
                 parameters["strength"] = amount
             if color_value is not None:
                 parameters["start_color"] = color_value
-            spec = effect("gradient", **parameters)
+            spec = EffectSpec("gradient", parameters)
         elif filter_type == "shadow":
             opacity = 0.6 if amount is None else amount / 100.0
             spec = effect(
@@ -1779,16 +1804,19 @@ def filter_add(
             parameters = {"size_px": 5 if amount is None else amount}
             if color_value is not None:
                 parameters["color"] = color_value
-            spec = effect("outline", **parameters)
+            spec = EffectSpec("outline", parameters)
         elif filter_type == "mosaic":
             spec = effect("mosaic", size_px=10 if amount is None else amount)
         elif filter_type == "chromakey":
             parameters = {"hue_range": 24 if amount is None else amount}
             if color_value is not None:
                 parameters["color"] = color_value
-            spec = effect("chroma_key", **parameters)
+            spec = EffectSpec("chroma_key", parameters)
         elif filter_type in {"sharpen", "shake"}:
-            spec = legacy_compatibility_effect(filter_type, strength=amount)
+            legacy_profile: Literal["sharpen", "shake"] = (
+                "sharpen" if filter_type == "sharpen" else "shake"
+            )
+            spec = legacy_compatibility_effect(legacy_profile, strength=amount)
         else:  # click.Choice protects this path.
             raise AssertionError(filter_type)
         added = apply_effects(project, obj, spec)
@@ -2383,7 +2411,8 @@ def _calculate_frame_range(
             if detected_duration:
                 duration = detected_duration
                 safe_echo(
-                    f"メディアファイルから長さを自動検出: {duration}フレーム ({duration / scene.fps:.1f}秒)",
+                    f"メディアファイルから長さを自動検出: {duration}フレーム "
+                    f"({duration / scene.fps:.1f}秒)",
                     err=True,
                 )
 
@@ -2442,7 +2471,8 @@ def _check_overlap_warnings(
             if obj_type in warn_types or other_type in warn_types:
                 if other_type == obj_type:
                     warnings.append(
-                        f"警告: レイヤー {obj.layer} に同種オブジェクト (ID {obj.object_id}: {other_type}) "
+                        f"警告: レイヤー {obj.layer} に同種オブジェクト "
+                        f"(ID {obj.object_id}: {other_type}) "
                         f"がフレーム {obj.frame_start}-{obj.frame_end} で重複"
                     )
 
@@ -2710,7 +2740,8 @@ def preview(
         from aviutl2_api.renderer import FrameRenderer
     except ImportError as e:
         raise click.ClickException(
-            f"レンダラーのインポートに失敗しました。opencv-python と pillow がインストールされていることを確認してください: {e}"
+            "レンダラーのインポートに失敗しました。opencv-python と pillow が"
+            f"インストールされていることを確認してください: {e}"
         )
 
     # Parse background color
@@ -2854,7 +2885,7 @@ def _print_layers(scene: Scene) -> None:
 
     for layer in sorted(layer_map.keys()):
         objs = layer_map[layer]
-        types = {}
+        types: dict[str, int] = {}
         for obj in objs:
             t = obj.object_type or "不明"
             types[t] = types.get(t, 0) + 1
@@ -3188,10 +3219,12 @@ def fix_collisions(
         for layer, obj1, obj2 in all_collisions:
             safe_echo(f"レイヤー {layer}:")
             safe_echo(
-                f"  ID {obj1.object_id} ({obj1.object_type}): フレーム {obj1.frame_start}-{obj1.frame_end}"
+                f"  ID {obj1.object_id} ({obj1.object_type}): "
+                f"フレーム {obj1.frame_start}-{obj1.frame_end}"
             )
             safe_echo(
-                f"  ID {obj2.object_id} ({obj2.object_type}): フレーム {obj2.frame_start}-{obj2.frame_end}"
+                f"  ID {obj2.object_id} ({obj2.object_type}): "
+                f"フレーム {obj2.frame_start}-{obj2.frame_end}"
             )
             # Calculate overlap
             overlap_start = max(obj1.frame_start, obj2.frame_start)
@@ -3231,7 +3264,8 @@ def fix_collisions(
         total_moved += 1
 
         safe_echo(
-            f"  ID {obj2.object_id} ({obj2.object_type}): レイヤー {old_layer} → {new_layer}"
+            f"  ID {obj2.object_id} ({obj2.object_type}): "
+            f"レイヤー {old_layer} → {new_layer}"
         )
 
     # Save
