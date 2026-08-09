@@ -15,6 +15,8 @@ from aviutl2_api.renderer.interpolation import (
     get_property_value_at_frame,
 )
 
+from .._typing import Array
+
 if TYPE_CHECKING:
     from aviutl2_api.models import Effect, Scene, TimelineObject
 
@@ -44,7 +46,7 @@ class ShapeRenderer(ContentRenderer):
         frame: int,
         obj: TimelineObject,
         scene: Scene,
-    ) -> tuple[np.ndarray, tuple[int, int]]:
+    ) -> tuple[Array, tuple[int, int]]:
         """Render a shape.
 
         Args:
@@ -128,7 +130,7 @@ class ShapeRenderer(ContentRenderer):
         b: int,
         filled: bool,
         line_width: float,
-    ) -> np.ndarray:
+    ) -> Array:
         """Draw a circle/ellipse."""
         # Add padding for anti-aliasing
         padding = 4
@@ -160,7 +162,7 @@ class ShapeRenderer(ContentRenderer):
         filled: bool,
         line_width: float,
         rounded: bool,
-    ) -> np.ndarray:
+    ) -> Array:
         """Draw a rectangle."""
         padding = 4
         canvas_w = width + padding * 2
@@ -188,7 +190,7 @@ class ShapeRenderer(ContentRenderer):
         b: int,
         filled: bool,
         line_width: float,
-    ) -> np.ndarray:
+    ) -> Array:
         """Draw an equilateral triangle."""
         padding = 4
         canvas_w = width + padding * 2
@@ -229,7 +231,7 @@ class ShapeRenderer(ContentRenderer):
         filled: bool,
         line_width: float,
         sides: int,
-    ) -> np.ndarray:
+    ) -> Array:
         """Draw a regular polygon."""
         padding = 4
         canvas_w = width + padding * 2
@@ -276,7 +278,7 @@ class ShapeRenderer(ContentRenderer):
         b: int,
         filled: bool,
         line_width: float,
-    ) -> np.ndarray:
+    ) -> Array:
         """Draw a 5-pointed star."""
         padding = 4
         canvas_w = width + padding * 2
@@ -329,7 +331,7 @@ class ShapeRenderer(ContentRenderer):
         b: int,
         filled: bool,
         line_width: float,
-    ) -> np.ndarray:
+    ) -> Array:
         """Draw a heart shape."""
         padding = 4
         canvas_w = width + padding * 2
@@ -381,7 +383,7 @@ class ShapeRenderer(ContentRenderer):
         r: int,
         g: int,
         b: int,
-    ) -> np.ndarray:
+    ) -> Array:
         """Draw a solid background."""
         img = np.zeros((height, width, 4), dtype=np.uint8)
         img[:, :] = (r, g, b, 255)

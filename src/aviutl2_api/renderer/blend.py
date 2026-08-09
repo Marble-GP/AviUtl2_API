@@ -6,6 +6,8 @@ from collections.abc import Callable
 
 import numpy as np
 
+from ._typing import Array
+
 # Mapping from Japanese blend mode names to internal names
 BLEND_MODES: dict[str, str] = {
     "通常": "normal",
@@ -25,11 +27,11 @@ BLEND_MODES: dict[str, str] = {
 
 
 def blend(
-    canvas: np.ndarray,
-    layer: np.ndarray,
+    canvas: Array,
+    layer: Array,
     mode: str = "通常",
     opacity: float = 1.0,
-) -> np.ndarray:
+) -> Array:
     """Composite layer onto canvas using specified blend mode.
 
     Args:
@@ -73,8 +75,8 @@ def blend(
 
 
 def blend_onto(
-    canvas: np.ndarray,
-    layer: np.ndarray,
+    canvas: Array,
+    layer: Array,
     x: int,
     y: int,
     mode: str = "通常",
@@ -124,81 +126,81 @@ def blend_onto(
 # Blend function implementations
 
 
-def _blend_normal(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_normal(bg: Array, fg: Array) -> Array:
     """Normal blend: foreground replaces background."""
     return fg
 
 
-def _blend_add(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_add(bg: Array, fg: Array) -> Array:
     """Additive blend: add colors (clamped)."""
     return np.asarray(np.minimum(bg + fg, 1.0))
 
 
-def _blend_subtract(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_subtract(bg: Array, fg: Array) -> Array:
     """Subtractive blend: subtract foreground from background."""
     return np.asarray(np.maximum(bg - fg, 0.0))
 
 
-def _blend_multiply(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_multiply(bg: Array, fg: Array) -> Array:
     """Multiply blend: multiply colors."""
     return np.asarray(bg * fg)
 
 
-def _blend_screen(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_screen(bg: Array, fg: Array) -> Array:
     """Screen blend: inverse of multiply."""
     return np.asarray(1 - (1 - bg) * (1 - fg))
 
 
-def _blend_overlay(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_overlay(bg: Array, fg: Array) -> Array:
     """Overlay blend: multiply or screen based on background."""
     mask = bg < 0.5
     result = np.where(mask, 2 * bg * fg, 1 - 2 * (1 - bg) * (1 - fg))
     return np.asarray(result)
 
 
-def _blend_lighten(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_lighten(bg: Array, fg: Array) -> Array:
     """Lighten blend: take maximum of each channel."""
     return np.asarray(np.maximum(bg, fg))
 
 
-def _blend_darken(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_darken(bg: Array, fg: Array) -> Array:
     """Darken blend: take minimum of each channel."""
     return np.asarray(np.minimum(bg, fg))
 
 
-def _blend_difference(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_difference(bg: Array, fg: Array) -> Array:
     """Difference blend: absolute difference."""
     return np.asarray(np.abs(bg - fg))
 
 
-def _blend_exclusion(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_exclusion(bg: Array, fg: Array) -> Array:
     """Exclusion blend: similar to difference but lower contrast."""
     return np.asarray(bg + fg - 2 * bg * fg)
 
 
-def _blend_hard_light(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_hard_light(bg: Array, fg: Array) -> Array:
     """Hard light blend: multiply or screen based on foreground."""
     mask = fg < 0.5
     result = np.where(mask, 2 * bg * fg, 1 - 2 * (1 - bg) * (1 - fg))
     return np.asarray(result)
 
 
-def _blend_soft_light(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_soft_light(bg: Array, fg: Array) -> Array:
     """Soft light blend: gentler version of hard light."""
     return np.asarray((1 - 2 * fg) * bg * bg + 2 * fg * bg)
 
 
-def _blend_color_dodge(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_color_dodge(bg: Array, fg: Array) -> Array:
     """Color dodge blend: brighten background based on foreground."""
     return np.asarray(np.minimum(bg / np.maximum(1 - fg, 1e-6), 1.0))
 
 
-def _blend_color_burn(bg: np.ndarray, fg: np.ndarray) -> np.ndarray:
+def _blend_color_burn(bg: Array, fg: Array) -> Array:
     """Color burn blend: darken background based on foreground."""
     return np.asarray(1 - np.minimum((1 - bg) / np.maximum(fg, 1e-6), 1.0))
 
 
-BlendFunction = Callable[[np.ndarray, np.ndarray], np.ndarray]
+BlendFunction = Callable[[Array, Array], Array]
 
 
 def _get_blend_function(mode: str) -> BlendFunction:

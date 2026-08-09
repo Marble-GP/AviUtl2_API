@@ -14,6 +14,8 @@ from aviutl2_api.renderer.interpolation import (
     get_property_value_at_frame,
 )
 
+from .._typing import Array
+
 if TYPE_CHECKING:
     from aviutl2_api.models import Effect, TimelineObject
 
@@ -27,11 +29,11 @@ class BorderFilter(FilterEffect):
 
     def apply(
         self,
-        image: np.ndarray,
+        image: Array,
         effect: Effect,
         frame: int,
         obj: TimelineObject,
-    ) -> np.ndarray:
+    ) -> Array:
         """Apply border/outline effect to the image.
 
         Args:

@@ -14,6 +14,8 @@ from aviutl2_api.renderer.interpolation import (
     get_property_value_at_frame,
 )
 
+from .._typing import Array
+
 if TYPE_CHECKING:
     from aviutl2_api.models import Effect, TimelineObject
 
@@ -30,11 +32,11 @@ class GlowFilter(FilterEffect):
 
     def apply(
         self,
-        image: np.ndarray,
+        image: Array,
         effect: Effect,
         frame: int,
         obj: TimelineObject,
-    ) -> np.ndarray:
+    ) -> Array:
         """Apply glow effect to the image.
 
         Args:

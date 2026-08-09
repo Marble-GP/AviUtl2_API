@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-import numpy as np
+from .._typing import Array
 
 if TYPE_CHECKING:
     from aviutl2_api.models import Effect, TimelineObject
@@ -33,11 +33,11 @@ class FilterEffect(ABC):
     @abstractmethod
     def apply(
         self,
-        image: np.ndarray,
+        image: Array,
         effect: Effect,
         frame: int,
         obj: TimelineObject,
-    ) -> np.ndarray:
+    ) -> Array:
         """Apply the filter effect to an image.
 
         Args:

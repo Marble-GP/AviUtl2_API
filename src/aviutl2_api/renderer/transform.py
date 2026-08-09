@@ -7,9 +7,11 @@ import math
 import cv2
 import numpy as np
 
+from ._typing import Array
+
 
 def apply_transform(
-    content: np.ndarray,
+    content: Array,
     x: float,
     y: float,
     z: float,
@@ -22,7 +24,7 @@ def apply_transform(
     scale: float,
     aspect: float,
     canvas_size: tuple[int, int],
-) -> tuple[np.ndarray, int, int]:
+) -> tuple[Array, int, int]:
     """Apply 2D transformation to content with 3D rotation projection.
 
     AviUtl coordinate system:
@@ -103,11 +105,11 @@ def apply_transform(
 
 
 def _apply_z_rotation(
-    image: np.ndarray,
+    image: Array,
     rotation: float,
     center_offset_x: float = 0,
     center_offset_y: float = 0,
-) -> tuple[np.ndarray, int, int]:
+) -> tuple[Array, int, int]:
     """Apply Z-axis rotation (standard 2D rotation).
 
     Args:
@@ -154,12 +156,12 @@ def _apply_z_rotation(
 
 
 def _apply_3d_rotation(
-    image: np.ndarray,
+    image: Array,
     x_rotation: float,
     y_rotation: float,
     center_offset_x: float = 0,
     center_offset_y: float = 0,
-) -> tuple[np.ndarray, int, int]:
+) -> tuple[Array, int, int]:
     """Apply 3D rotation as 2D perspective projection (parallel projection).
 
     This creates a card-flip effect by using perspective transforms.
@@ -189,9 +191,9 @@ def _apply_3d_rotation(
 
 
 def _apply_x_axis_rotation(
-    image: np.ndarray,
+    image: Array,
     rotation: float,
-) -> tuple[np.ndarray, int, int]:
+) -> tuple[Array, int, int]:
     """Apply X-axis rotation as perspective projection.
 
     Creates a card tilting forward/backward effect.
@@ -256,9 +258,9 @@ def _apply_x_axis_rotation(
 
 
 def _apply_y_axis_rotation(
-    image: np.ndarray,
+    image: Array,
     rotation: float,
-) -> tuple[np.ndarray, int, int]:
+) -> tuple[Array, int, int]:
     """Apply Y-axis rotation as perspective projection.
 
     Creates a card tilting left/right effect.
@@ -319,10 +321,10 @@ def _apply_y_axis_rotation(
 
 
 def scale_image(
-    image: np.ndarray,
+    image: Array,
     scale_x: float,
     scale_y: float,
-) -> np.ndarray:
+) -> Array:
     """Scale an image by given factors.
 
     Args:
@@ -350,10 +352,10 @@ def scale_image(
 
 
 def flip_image(
-    image: np.ndarray,
+    image: Array,
     horizontal: bool = False,
     vertical: bool = False,
-) -> np.ndarray:
+) -> Array:
     """Flip an image horizontally and/or vertically.
 
     Args:

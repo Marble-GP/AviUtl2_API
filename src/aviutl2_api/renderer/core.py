@@ -18,6 +18,8 @@ from aviutl2_api.renderer.interpolation import (
 )
 from aviutl2_api.renderer.transform import apply_transform
 
+from ._typing import Array
+
 if TYPE_CHECKING:
     from aviutl2_api.models import Effect, Project, TimelineObject
 
@@ -417,12 +419,12 @@ class FrameRenderer:
 
     def _apply_filter(
         self,
-        image: np.ndarray,
+        image: Array,
         effect: Effect,
         frame: int,
         obj: TimelineObject,
         context: RenderContext,
-    ) -> np.ndarray:
+    ) -> Array:
         """Apply a filter effect to an image.
 
         Args:
@@ -447,7 +449,7 @@ class FrameRenderer:
         # No filter found - return unchanged
         return image
 
-    def _create_placeholder(self, effect_name: str) -> np.ndarray:
+    def _create_placeholder(self, effect_name: str) -> Array:
         """Create a placeholder image for unsupported content types.
 
         Args:

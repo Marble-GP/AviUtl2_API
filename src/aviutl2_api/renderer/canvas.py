@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from ._typing import Array
+
 if TYPE_CHECKING:
     from PIL import Image
 
@@ -29,7 +31,7 @@ class FrameBuffer:
 
     width: int
     height: int
-    data: np.ndarray = field(repr=False)
+    data: Array = field(repr=False)
 
     @classmethod
     def create(
@@ -90,7 +92,7 @@ class FrameBuffer:
 
         return Image.fromarray(self.data, mode="RGBA")
 
-    def to_numpy(self) -> np.ndarray:
+    def to_numpy(self) -> Array:
         """Get the raw numpy array.
 
         Returns:
@@ -232,7 +234,7 @@ class FrameBuffer:
 
     def blit(
         self,
-        source: np.ndarray,
+        source: Array,
         dest_x: int,
         dest_y: int,
         src_x: int = 0,

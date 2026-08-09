@@ -11,6 +11,8 @@ from PIL import Image, ImageDraw
 from aviutl2_api.renderer.content.base import ContentRenderer
 from aviutl2_api.renderer.interpolation import get_property_string
 
+from .._typing import Array
+
 if TYPE_CHECKING:
     from aviutl2_api.models import Effect, Scene, TimelineObject
 
@@ -28,7 +30,7 @@ class ImageRenderer(ContentRenderer):
             placeholder_color: RGB color for placeholder images
         """
         self._placeholder_color = placeholder_color
-        self._cache: dict[str, np.ndarray] = {}
+        self._cache: dict[str, Array] = {}
         self._missing_files: set[str] = set()
 
     def can_render(self, effect_name: str) -> bool:
@@ -41,7 +43,7 @@ class ImageRenderer(ContentRenderer):
         frame: int,
         obj: TimelineObject,
         scene: Scene,
-    ) -> tuple[np.ndarray, tuple[int, int]]:
+    ) -> tuple[Array, tuple[int, int]]:
         """Render an image file.
 
         Args:
@@ -101,7 +103,7 @@ class ImageRenderer(ContentRenderer):
         self,
         size: tuple[int, int],
         text: str,
-    ) -> np.ndarray:
+    ) -> Array:
         """Create a placeholder image with error message.
 
         Args:

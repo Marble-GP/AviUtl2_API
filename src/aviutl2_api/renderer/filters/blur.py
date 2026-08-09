@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import cv2
-import numpy as np
 
 from aviutl2_api.renderer.filters.base import FilterEffect
 from aviutl2_api.renderer.interpolation import get_property_value_at_frame
+
+from .._typing import Array
 
 if TYPE_CHECKING:
     from aviutl2_api.models import Effect, TimelineObject
@@ -23,11 +24,11 @@ class BlurFilter(FilterEffect):
 
     def apply(
         self,
-        image: np.ndarray,
+        image: Array,
         effect: Effect,
         frame: int,
         obj: TimelineObject,
-    ) -> np.ndarray:
+    ) -> Array:
         """Apply Gaussian blur to the image.
 
         Args:

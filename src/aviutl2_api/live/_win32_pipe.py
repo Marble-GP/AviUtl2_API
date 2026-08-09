@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import ctypes
+import sys
 import time
 from ctypes import wintypes
 from threading import Lock
 from typing import Any
+
+if sys.platform != "win32":
+    raise ImportError("Windows named-pipe transport is available only on Windows")
 
 _GENERIC_READ = 0x80000000
 _GENERIC_WRITE = 0x40000000

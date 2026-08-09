@@ -15,6 +15,8 @@ from aviutl2_api.renderer.interpolation import (
     get_property_value_at_frame,
 )
 
+from .._typing import Array
+
 if TYPE_CHECKING:
     from aviutl2_api.models import Effect, Scene, TimelineObject
 
@@ -83,7 +85,7 @@ class TextRenderer(ContentRenderer):
         frame: int,
         obj: TimelineObject,
         scene: Scene,
-    ) -> tuple[np.ndarray, tuple[int, int]]:
+    ) -> tuple[Array, tuple[int, int]]:
         """Render text.
 
         Args:
@@ -248,7 +250,7 @@ class TextRenderer(ContentRenderer):
         decoration: str,
         letter_spacing: float,
         line_spacing: float,
-    ) -> np.ndarray:
+    ) -> Array:
         """Render text to an RGBA array.
 
         Args:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-import numpy as np
+from .._typing import Array
 
 if TYPE_CHECKING:
     from aviutl2_api.models import Effect, Scene, TimelineObject
@@ -37,7 +37,7 @@ class ContentRenderer(ABC):
         frame: int,
         obj: TimelineObject,
         scene: Scene,
-    ) -> tuple[np.ndarray, tuple[int, int]]:
+    ) -> tuple[Array, tuple[int, int]]:
         """Render the content.
 
         Args:
@@ -92,7 +92,7 @@ class RenderContext:
         self.scene_fps = scene_fps
 
         # Cache for media files
-        self._media_cache: dict[str, np.ndarray] = {}
+        self._media_cache: dict[str, Array] = {}
 
         # Missing file tracking
         self._missing_files: set[str] = set()
@@ -101,7 +101,7 @@ class RenderContext:
         self.warnings: list[str] = []
         self.errors: list[str] = []
 
-    def cache_media(self, path: str, data: np.ndarray) -> None:
+    def cache_media(self, path: str, data: Array) -> None:
         """Cache a loaded media file.
 
         Args:
@@ -110,7 +110,7 @@ class RenderContext:
         """
         self._media_cache[path] = data
 
-    def get_cached_media(self, path: str) -> np.ndarray | None:
+    def get_cached_media(self, path: str) -> Array | None:
         """Get cached media data.
 
         Args:

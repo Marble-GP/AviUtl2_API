@@ -15,6 +15,8 @@ from aviutl2_api.renderer.interpolation import (
     get_property_value_at_frame,
 )
 
+from .._typing import Array
+
 if TYPE_CHECKING:
     from aviutl2_api.models import Effect, Scene, TimelineObject
 
@@ -38,7 +40,7 @@ class VideoRenderer(ContentRenderer):
         """
         self._placeholder_color = placeholder_color
         self._video_cache: dict[str, cv2.VideoCapture] = {}
-        self._frame_cache: dict[str, np.ndarray] = {}
+        self._frame_cache: dict[str, Array] = {}
         self._cache_size = cache_size
         self._missing_files: set[str] = set()
         self._video_info: dict[str, dict[str, float | int]] = {}
@@ -53,7 +55,7 @@ class VideoRenderer(ContentRenderer):
         frame: int,
         obj: TimelineObject,
         scene: Scene,
-    ) -> tuple[np.ndarray, tuple[int, int]]:
+    ) -> tuple[Array, tuple[int, int]]:
         """Render a video frame.
 
         Args:
@@ -166,7 +168,7 @@ class VideoRenderer(ContentRenderer):
         self._video_cache[path] = cap
         return cap
 
-    def _cache_frame(self, key: str, frame: np.ndarray) -> None:
+    def _cache_frame(self, key: str, frame: Array) -> None:
         """Cache a frame with size limit.
 
         Args:
@@ -185,7 +187,7 @@ class VideoRenderer(ContentRenderer):
         self,
         size: tuple[int, int],
         text: str,
-    ) -> np.ndarray:
+    ) -> Array:
         """Create a placeholder frame with message.
 
         Args:
