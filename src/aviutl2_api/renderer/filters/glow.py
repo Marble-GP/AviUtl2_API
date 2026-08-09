@@ -95,7 +95,7 @@ class GlowFilter(FilterEffect):
         glow_mask = glow_mask * alpha  # Apply alpha
 
         # Create glow layer (always 4 channels)
-        glow = np.zeros((h, w, 4), dtype=np.float32)
+        glow: Array = np.zeros((h, w, 4), dtype=np.float32)
         if use_custom_color:
             glow[:, :, 0] = gr
             glow[:, :, 1] = gg
@@ -126,7 +126,9 @@ class GlowFilter(FilterEffect):
         # Add padding for glow expansion
         padding = blur_size
         # Place glow in center
-        glow_padded = np.zeros((h + padding * 2, w + padding * 2, 4), dtype=np.float32)
+        glow_padded: Array = np.zeros(
+            (h + padding * 2, w + padding * 2, 4), dtype=np.float32
+        )
         glow_padded[padding : padding + h, padding : padding + w] = glow_u8.astype(
             np.float32
         )

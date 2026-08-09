@@ -71,7 +71,7 @@ class ShadowFilter(FilterEffect):
         result = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
 
         # Create shadow layer
-        shadow = np.zeros((h, w, 4), dtype=np.uint8)
+        shadow: Array = np.zeros((h, w, 4), dtype=np.uint8)
         shadow[:, :, 0] = r
         shadow[:, :, 1] = g
         shadow[:, :, 2] = b
