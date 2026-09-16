@@ -1439,7 +1439,9 @@ Json CommandDispatcher::capabilities_result() const {
              {"relink_atomic", Json(true)},
              {"split_basic_clips", Json(true)},
              {"trim_fixed_speed",
-              Json("verified_alias_replacement")},
+              Json(host_version() >= kHostVersionSectionEndpoints
+                       ? "sdk_move_object_section"
+                       : "verified_alias_replacement")},
          })},
         {"structural_editing",
          Json(Json::Object{
@@ -4244,9 +4246,9 @@ std::string CommandDispatcher::handle_structural_edit(
         request.id,
         Json(Json::Object{
             {"backend",
-             Json(result.native_backend
-                      ? "sdk_move_effect"
-                      : "verified_alias_replacement")},
+             Json(result.backend.empty()
+                      ? "verified_alias_replacement"
+                      : result.backend)},
             {"effect_order", Json(std::move(effect_order))},
             {"frame_end", Json(result.frame_end)},
             {"frame_start", Json(result.frame_start)},

@@ -304,6 +304,10 @@ the user for GUI Undo when `gui_undo_required` is true.
   A reorder that moves a non-filter effect (scene transition or object
   control) keeps the verified Alias-replacement backend on every host, and
   the receipt's `backend` field always reports the backend actually used.
+  On AviUtl2 2.1.4+ the bridge applies `media.trim` natively with the SDK
+  `move_object_section()` endpoint moves and reports
+  `backend: "sdk_move_object_section"`; older hosts keep the verified
+  Alias-replacement backend.
 - Timeline: `timeline.transaction.validate/apply`, `timeline.shift_after`,
   `timeline.ripple_insert/delete`, and `timeline.close_gap`.
 - Assets/review: `media.relink`, `audio.render/read_chunk/release`, and

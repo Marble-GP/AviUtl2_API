@@ -1087,6 +1087,329 @@ void test_host_native_effect_reorder() {
     aviutl2::live::store_host_version(0U);
 }
 
+HostObjectFixture host_trim_fixture{
+    {1, 0, 99},
+    1,
+    "[Object]\r\n[Object.0]\r\neffect.name=動画ファイル\r\n"
+    "file=C:\\media\\clip.mp4\r\n"
+    "再生位置=10.000000\r\n"
+    "再生速度=100.000000\r\n"};
+
+HostEffectSlot host_trim_effect_slot{L"動画ファイル", 2};
+EDIT_INFO host_trim_edit_info{};
+EDIT_SECTION host_trim_edit_section{};
+std::string host_trim_position = "10.000000";
+std::string host_trim_speed = "100.000000";
+std::vector<std::array<int, 2>> host_trim_moves;
+int host_trim_move_calls = 0;
+int host_trim_move_fail_on_call = 0;
+int host_trim_set_calls = 0;
+bool host_trim_set_fail = false;
+
+[[nodiscard]] OBJECT_HANDLE find_host_trim_object(
+    const int layer,
+    const int frame) {
+    if (host_trim_fixture.range.layer <= layer &&
+        layer <= host_trim_fixture.occupied_layer_end &&
+        host_trim_fixture.range.end >= frame) {
+        return static_cast<OBJECT_HANDLE>(&host_trim_fixture);
+    }
+    return nullptr;
+}
+
+[[nodiscard]] OBJECT_LAYER_FRAME get_host_trim_object_range(
+    const OBJECT_HANDLE object) {
+    return static_cast<HostObjectFixture*>(object)->range;
+}
+
+[[nodiscard]] LPCSTR get_host_trim_object_alias(
+    const OBJECT_HANDLE object) {
+    return static_cast<HostObjectFixture*>(object)->alias;
+}
+
+[[nodiscard]] int get_host_trim_section_num(OBJECT_HANDLE) {
+    return 1;
+}
+
+[[nodiscard]] int get_host_trim_effect_list(
+    OBJECT_HANDLE,
+    EFFECT_HANDLE* effect_list,
+    const int effect_num) {
+    if (effect_list == nullptr) {
+        return 1;
+    }
+    if (effect_num < 1) {
+        return -1;
+    }
+    effect_list[0] = &host_trim_effect_slot;
+    return 1;
+}
+
+[[nodiscard]] LPCWSTR get_host_trim_effect_name(
+    const EFFECT_HANDLE) {
+    return host_trim_effect_slot.name;
+}
+
+[[nodiscard]] LPCSTR get_host_trim_item_value(
+    OBJECT_HANDLE,
+    const LPCWSTR effect,
+    const LPCWSTR item) {
+    if (effect == nullptr || item == nullptr) {
+        return nullptr;
+    }
+    const std::wstring_view name(item);
+    if (name == std::wstring_view(L"再生位置")) {
+        return host_trim_position.c_str();
+    }
+    if (name == std::wstring_view(L"再生速度")) {
+        return host_trim_speed.c_str();
+    }
+    return nullptr;
+}
+
+[[nodiscard]] bool set_host_trim_item_value(
+    OBJECT_HANDLE,
+    const LPCWSTR effect,
+    const LPCWSTR item,
+    const LPCSTR value) {
+    if (effect == nullptr || item == nullptr || value == nullptr) {
+        return false;
+    }
+    if (host_trim_set_fail) {
+        return false;
+    }
+    const std::wstring_view name(item);
+    if (name == std::wstring_view(L"再生位置")) {
+        ++host_trim_set_calls;
+        host_trim_position = value;
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool move_host_trim_section(
+    OBJECT_HANDLE object,
+    const int section,
+    const int frame) {
+    ++host_trim_move_calls;
+    if (host_trim_move_calls == host_trim_move_fail_on_call) {
+        return false;
+    }
+    HostObjectFixture* const fixture =
+        static_cast<HostObjectFixture*>(object);
+    if (section == 0) {
+        if (frame > fixture->range.end) {
+            return false;
+        }
+        fixture->range.start = frame;
+    } else if (section == 1) {
+        if (frame < fixture->range.start) {
+            return false;
+        }
+        fixture->range.end = frame;
+    } else {
+        return false;
+    }
+    host_trim_moves.push_back({section, frame});
+    return true;
+}
+
+void get_host_trim_edit_info(EDIT_INFO* info, const int info_size) {
+    require(
+        info_size == static_cast<int>(sizeof(EDIT_INFO)),
+        "trim host adapter should request complete edit information");
+    *info = host_trim_edit_info;
+}
+
+[[nodiscard]] bool call_host_trim_section(
+    void* parameter,
+    void (*callback)(void*, EDIT_SECTION*)) {
+    callback(parameter, &host_trim_edit_section);
+    return true;
+}
+
+void test_host_native_media_trim() {
+    host_trim_edit_info = {};
+    host_trim_edit_info.width = 1920;
+    host_trim_edit_info.height = 1080;
+    host_trim_edit_info.rate = 30;
+    host_trim_edit_info.scale = 1;
+    host_trim_edit_info.sample_rate = 44100;
+    host_trim_edit_info.frame_max = 199;
+    host_trim_edit_info.layer_max = 2;
+    host_trim_edit_info.scene_id = 5;
+
+    host_trim_edit_section = {};
+    host_trim_edit_section.find_object = find_host_trim_object;
+    host_trim_edit_section.get_object_layer_frame =
+        get_host_trim_object_range;
+    host_trim_edit_section.get_object_alias =
+        get_host_trim_object_alias;
+    host_trim_edit_section.get_object_section_num =
+        get_host_trim_section_num;
+    host_trim_edit_section.get_effect_list =
+        get_host_trim_effect_list;
+    host_trim_edit_section.get_effect_name =
+        get_host_trim_effect_name;
+    host_trim_edit_section.get_object_item_value =
+        get_host_trim_item_value;
+    host_trim_edit_section.set_object_item_value =
+        set_host_trim_item_value;
+    host_trim_edit_section.move_object_section =
+        move_host_trim_section;
+
+    EDIT_HANDLE edit_handle{};
+    edit_handle.get_edit_info = get_host_trim_edit_info;
+    edit_handle.get_edit_state = get_host_reorder_edit_state;
+    edit_handle.call_read_section_param = call_host_trim_section;
+    edit_handle.call_edit_section_param = call_host_trim_section;
+
+    HostSdkAdapter adapter(&edit_handle);
+
+    aviutl2::live::store_host_version(
+        aviutl2::live::kHostVersionSectionEndpoints);
+    {
+        host_trim_fixture.range = {1, 0, 99};
+        host_trim_position = "10.000000";
+        host_trim_moves.clear();
+        host_trim_move_calls = 0;
+        host_trim_move_fail_on_call = 0;
+        host_trim_set_calls = 0;
+        host_trim_set_fail = false;
+
+        const SnapshotResult snapshot = adapter.get_snapshot();
+        require(
+            snapshot.ok && snapshot.objects.size() == 1U,
+            "the trim host fixture should expose one object");
+
+        const StructuralEditResult trimmed =
+            adapter.trim_media_object(
+                snapshot.revision, 0U, 20, 59, std::nullopt);
+        require(
+            trimmed.ok && trimmed.native_backend &&
+                trimmed.backend == "sdk_move_object_section",
+            "a 2.1.4 host should trim media natively");
+        require(
+            trimmed.layer == 1 && trimmed.frame_start == 20 &&
+                trimmed.frame_end == 59,
+            "the native trim should report the requested range");
+        require(
+            trimmed.has_source_position &&
+                trimmed.source_position == 30.0,
+            "the native trim should compensate the playback position");
+        require(
+            host_trim_fixture.range.start == 20 &&
+                host_trim_fixture.range.end == 59,
+            "the host range should match the trim request");
+        require(
+            host_trim_position == "30.000000",
+            "the playback position item should be rewritten");
+        require(
+            host_trim_moves.size() == 2U &&
+                host_trim_moves[0][0] == 0 &&
+                host_trim_moves[0][1] == 20 &&
+                host_trim_moves[1][0] == 1 &&
+                host_trim_moves[1][1] == 59,
+            "the native trim should move the start point first");
+        require(
+            host_trim_set_calls == 1,
+            "the native trim should set the source position once");
+    }
+
+    {
+        host_trim_fixture.range = {1, 0, 99};
+        host_trim_position = "10.000000";
+        host_trim_moves.clear();
+        host_trim_move_calls = 0;
+        host_trim_move_fail_on_call = 0;
+        host_trim_set_calls = 0;
+        host_trim_set_fail = false;
+
+        const SnapshotResult snapshot = adapter.get_snapshot();
+        const StructuralEditResult trimmed =
+            adapter.trim_media_object(
+                snapshot.revision, 0U, 20, 59, 55.5);
+        require(
+            trimmed.ok && trimmed.source_position == 55.5,
+            "an explicit source position should override the delta");
+        require(
+            host_trim_position == "55.500000",
+            "the explicit source position should be written");
+    }
+
+    {
+        host_trim_fixture.range = {1, 0, 99};
+        host_trim_position = "10.000000";
+        host_trim_moves.clear();
+        host_trim_move_calls = 0;
+        host_trim_move_fail_on_call = 2;
+        host_trim_set_calls = 0;
+        host_trim_set_fail = false;
+
+        const SnapshotResult snapshot = adapter.get_snapshot();
+        const StructuralEditResult trimmed =
+            adapter.trim_media_object(
+                snapshot.revision, 0U, 20, 59, std::nullopt);
+        require(
+            !trimmed.ok && trimmed.native_backend &&
+                trimmed.error_code == "STRUCTURAL_EDIT_FAILED",
+            "a rejected endpoint move should fail closed");
+        require(
+            host_trim_fixture.range.start == 0 &&
+                host_trim_fixture.range.end == 99,
+            "a rejected endpoint move should restore the range");
+        require(
+            host_trim_position == "10.000000" &&
+                host_trim_set_calls == 0,
+            "a rejected endpoint move should not touch the source");
+    }
+
+    {
+        host_trim_fixture.range = {1, 0, 99};
+        host_trim_position = "10.000000";
+        host_trim_moves.clear();
+        host_trim_move_calls = 0;
+        host_trim_move_fail_on_call = 0;
+        host_trim_set_calls = 0;
+        host_trim_set_fail = true;
+
+        const SnapshotResult snapshot = adapter.get_snapshot();
+        const StructuralEditResult trimmed =
+            adapter.trim_media_object(
+                snapshot.revision, 0U, 20, 59, std::nullopt);
+        require(
+            !trimmed.ok &&
+                trimmed.error_code == "STRUCTURAL_EDIT_FAILED",
+            "a rejected source update should fail closed");
+        require(
+            host_trim_fixture.range.start == 0 &&
+                host_trim_fixture.range.end == 99 &&
+                host_trim_position == "10.000000",
+            "a rejected source update should restore the range");
+    }
+
+    aviutl2::live::store_host_version(0U);
+    {
+        host_trim_fixture.range = {1, 0, 99};
+        host_trim_position = "10.000000";
+        host_trim_moves.clear();
+        host_trim_move_calls = 0;
+        host_trim_move_fail_on_call = 0;
+        host_trim_set_calls = 0;
+        host_trim_set_fail = false;
+
+        const SnapshotResult snapshot = adapter.get_snapshot();
+        const StructuralEditResult trimmed =
+            adapter.trim_media_object(
+                snapshot.revision, 0U, 20, 59, std::nullopt);
+        require(
+            !trimmed.ok &&
+                trimmed.error_code == "EDIT_SECTION_UNAVAILABLE" &&
+                host_trim_move_calls == 0,
+            "an unrecorded host version should keep the Alias path");
+    }
+}
+
 void test_protocol_and_fixtures() {
     const std::filesystem::path fixture_dir(AVIUTL2_FIXTURE_DIR);
     FakeSdkAdapter sdk;
@@ -2046,6 +2369,7 @@ int main(const int argument_count, char** arguments) {
         test_json();
         test_host_snapshot_with_multi_layer_object();
         test_host_native_effect_reorder();
+        test_host_native_media_trim();
         test_protocol_and_fixtures();
         test_host_version_gates();
         test_sessions_events_and_audio();

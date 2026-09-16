@@ -258,6 +258,7 @@ struct StructuralEditResult final {
     std::string error_message;
     bool retryable = false;
     bool native_backend = false;
+    std::string backend;
 };
 
 enum class TimelineCommandType {

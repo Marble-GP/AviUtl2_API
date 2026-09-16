@@ -2072,6 +2072,7 @@ void apply_native_effect_reorder(
     const std::vector<std::size_t>& order,
     const std::vector<std::wstring>& effect_names) {
     context.result.native_backend = true;
+    context.result.backend = "sdk_move_effect";
 
     std::vector<std::wstring> expected_effect_names;
     expected_effect_names.reserve(order.size());
@@ -2194,6 +2195,172 @@ void apply_native_effect_reorder(
     context.result.ok = true;
 }
 
+void apply_native_media_trim(
+    StructuralEditContext& context,
+    EDIT_SECTION* edit,
+    const CapturedObject& object,
+    const std::wstring& media_effect_name,
+    const int target_start,
+    const int target_end) {
+    context.result.native_backend = true;
+    context.result.backend = "sdk_move_object_section";
+
+    const double desired_source = context.result.source_position;
+    std::string original_source_raw;
+    const char* const raw_source = edit->get_object_item_value(
+        object.handle,
+        media_effect_name.c_str(),
+        L"再生位置");
+    if (raw_source == nullptr) {
+        context.result.error_code = "HOST_INSPECTION_FAILED";
+        context.result.error_message =
+            "AviUtl2 could not read the media playback position.";
+        return;
+    }
+    original_source_raw.assign(raw_source);
+
+    struct AppliedMove final {
+        int section = 0;
+        int previous_frame = 0;
+    };
+    std::vector<AppliedMove> applied;
+    bool source_written = false;
+
+    const auto rollback = [&]() {
+        bool restored = true;
+        if (source_written) {
+            restored = edit->set_object_item_value(
+                object.handle,
+                media_effect_name.c_str(),
+                L"再生位置",
+                original_source_raw.c_str());
+        }
+        for (auto move = applied.rbegin();
+             move != applied.rend(); ++move) {
+            if (!edit->move_object_section(
+                    object.handle,
+                    move->section,
+                    move->previous_frame)) {
+                restored = false;
+            }
+        }
+        if (restored) {
+            const OBJECT_LAYER_FRAME range =
+                edit->get_object_layer_frame(object.handle);
+            restored =
+                range.layer == object.layer &&
+                range.start == object.frame_start &&
+                range.end == object.frame_end;
+        }
+        return restored;
+    };
+
+    // The section start point can only move while it stays at or
+    // before the current end, so extend-into-the-future trims must
+    // move the end point first.  The single-section gate guarantees
+    // the end point is section 1.
+    const auto move_start = [&]() {
+        if (target_start == object.frame_start) {
+            return true;
+        }
+        if (!edit->move_object_section(
+                object.handle,
+                0,
+                target_start)) {
+            return false;
+        }
+        applied.push_back(
+            AppliedMove{0, object.frame_start});
+        return true;
+    };
+    const auto move_end = [&]() {
+        if (target_end == object.frame_end) {
+            return true;
+        }
+        if (!edit->move_object_section(
+                object.handle,
+                1,
+                target_end)) {
+            return false;
+        }
+        applied.push_back(
+            AppliedMove{1, object.frame_end});
+        return true;
+    };
+
+    const bool start_first = target_start <= object.frame_end;
+    bool completed =
+        start_first ? (move_start() && move_end())
+                    : (move_end() && move_start());
+    if (completed) {
+        const OBJECT_LAYER_FRAME range =
+            edit->get_object_layer_frame(object.handle);
+        completed =
+            range.layer == object.layer &&
+            range.start == target_start &&
+            range.end == target_end;
+    }
+
+    StaticPosition moved_source;
+    if (completed) {
+        const char* const moved_raw = edit->get_object_item_value(
+            object.handle,
+            media_effect_name.c_str(),
+            L"再生位置");
+        completed =
+            moved_raw != nullptr &&
+            parse_static_position(moved_raw, moved_source);
+        if (completed) {
+            // AviUtl2 may compensate the playback position itself
+            // when the start point moves; only rewrite it when the
+            // host left the source unchanged.
+            const bool host_compensated =
+                std::abs(
+                    moved_source.value - desired_source) <=
+                0.000001;
+            if (!host_compensated) {
+                const std::string value = format_static_position(
+                    moved_source,
+                    desired_source);
+                completed = edit->set_object_item_value(
+                    object.handle,
+                    media_effect_name.c_str(),
+                    L"再生位置",
+                    value.c_str());
+                source_written = completed;
+            }
+        }
+    }
+    if (completed && source_written) {
+        const char* const verify_raw = edit->get_object_item_value(
+            object.handle,
+            media_effect_name.c_str(),
+            L"再生位置");
+        StaticPosition verified;
+        completed =
+            verify_raw != nullptr &&
+            parse_static_position(verify_raw, verified) &&
+            std::abs(verified.value - desired_source) <= 0.000001;
+    }
+    if (!completed) {
+        const bool restored = rollback();
+        context.result.error_code =
+            restored
+                ? "STRUCTURAL_EDIT_FAILED"
+                : "STRUCTURAL_EDIT_ROLLBACK_FAILED";
+        context.result.error_message =
+            restored
+                ? "AviUtl2 rejected the native trim and the original range was restored."
+                : "AviUtl2 rejected the native trim and the original range could not be restored.";
+        return;
+    }
+
+    context.result.layer = object.layer;
+    context.result.frame_start = target_start;
+    context.result.frame_end = target_end;
+    context.result.ok = true;
+}
+
 void structural_edit_callback(
     void* parameter,
     EDIT_SECTION* edit) noexcept {
@@ -2312,6 +2479,7 @@ void structural_edit_callback(
         std::wstring media_effect_name;
         std::string source_value;
         bool update_source = false;
+        bool native_trim = false;
         std::vector<std::wstring> expected_effect_names;
 
         if (context.type == StructuralEditType::duration) {
@@ -2390,15 +2558,20 @@ void structural_edit_callback(
             target_start = context.frame_start;
             target_end = context.frame_end;
             media_effect_name = primary;
-            source_value = format_static_position(
-                current_source,
-                desired_source);
-            expected_alias =
-                replace_object_alias_effect_item(
-                    replacement_alias,
-                    0U,
-                    wide_to_utf8(L"再生位置"),
-                    source_value);
+            native_trim =
+                host_version() >= kHostVersionSectionEndpoints &&
+                edit->move_object_section != nullptr;
+            if (!native_trim) {
+                source_value = format_static_position(
+                    current_source,
+                    desired_source);
+                expected_alias =
+                    replace_object_alias_effect_item(
+                        replacement_alias,
+                        0U,
+                        wide_to_utf8(L"再生位置"),
+                        source_value);
+            }
             context.result.has_source_position = true;
             context.result.source_position = desired_source;
             update_source = true;
@@ -2545,18 +2718,6 @@ void structural_edit_callback(
             }
         }
 
-        if (edit->get_object_alias == nullptr ||
-            edit->create_object_from_alias == nullptr ||
-            edit->delete_object == nullptr ||
-            edit->move_object == nullptr ||
-            edit->get_object_layer_frame == nullptr) {
-            context.result.error_code =
-                "EDIT_SECTION_UNAVAILABLE";
-            context.result.error_message =
-                "The AviUtl2 structural replacement APIs are unavailable.";
-            return;
-        }
-
         for (std::size_t index = 0U;
              index < timeline.objects.size();
              ++index) {
@@ -2574,6 +2735,29 @@ void structural_edit_callback(
                     "The structural replacement range collides with another object.";
                 return;
             }
+        }
+
+        if (native_trim) {
+            apply_native_media_trim(
+                context,
+                edit,
+                object,
+                media_effect_name,
+                target_start,
+                target_end);
+            return;
+        }
+
+        if (edit->get_object_alias == nullptr ||
+            edit->create_object_from_alias == nullptr ||
+            edit->delete_object == nullptr ||
+            edit->move_object == nullptr ||
+            edit->get_object_layer_frame == nullptr) {
+            context.result.error_code =
+                "EDIT_SECTION_UNAVAILABLE";
+            context.result.error_message =
+                "The AviUtl2 structural replacement APIs are unavailable.";
+            return;
         }
 
         const int original_length =
