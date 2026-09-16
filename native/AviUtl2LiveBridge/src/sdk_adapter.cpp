@@ -2337,10 +2337,10 @@ void structural_edit_callback(
             const std::wstring& primary = effect_names.front();
             if ((std::wcscmp(
                      primary.c_str(),
-                     L"蜍慕判繝輔ぃ繧､繝ｫ") != 0 &&
+                     L"動画ファイル") != 0 &&
                  std::wcscmp(
                      primary.c_str(),
-                     L"髻ｳ螢ｰ繝輔ぃ繧､繝ｫ") != 0) ||
+                     L"音声ファイル") != 0) ||
                 edit->get_object_item_value == nullptr ||
                 edit->set_object_item_value == nullptr) {
                 context.result.error_code =
@@ -2355,13 +2355,13 @@ void structural_edit_callback(
                     edit->get_object_item_value(
                         object.handle,
                         primary.c_str(),
-                        L"蜀咲函菴咲ｽｮ"),
+                        L"再生位置"),
                     current_source) ||
                 !parse_static_number(
                     edit->get_object_item_value(
                         object.handle,
                         primary.c_str(),
-                        L"蜀咲函騾溷ｺｦ"),
+                        L"再生速度"),
                     speed_percent) ||
                 speed_percent <= 0.0) {
                 context.result.error_code =
@@ -2397,7 +2397,7 @@ void structural_edit_callback(
                 replace_object_alias_effect_item(
                     replacement_alias,
                     0U,
-                    wide_to_utf8(L"蜀咲函菴咲ｽｮ"),
+                    wide_to_utf8(L"再生位置"),
                     source_value);
             context.result.has_source_position = true;
             context.result.source_position = desired_source;
@@ -2638,7 +2638,7 @@ void structural_edit_callback(
             completed = edit->set_object_item_value(
                 replacement,
                 media_effect_name.c_str(),
-                L"蜀咲函菴咲ｽｮ",
+                L"再生位置",
                 source_value.c_str());
         }
         if (completed && object.has_name) {
