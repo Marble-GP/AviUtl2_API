@@ -14,7 +14,7 @@ from aviutl2_api.serializer import serialize
 _SECTION_RE = re.compile(r"^\[([^\]\r\n]+)\]$")
 _KEY_VALUE_RE = re.compile(r"^([^=\r\n]+)=(.*)$")
 _OBJECT_RE = re.compile(r"^\d+(?:\.\d+)?$")
-_PROJECT_PATH_KEYS = frozenset({"file", "ファイル", "繝輔ぃ繧､繝ｫ"})
+_PROJECT_PATH_KEYS = frozenset({"file", "ファイル"})
 
 
 class Aup2DocumentError(ValueError):
