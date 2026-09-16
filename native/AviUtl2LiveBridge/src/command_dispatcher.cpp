@@ -1,6 +1,7 @@
 #include "command_dispatcher.hpp"
 
 #include "bridge_constants.hpp"
+#include "host_version.hpp"
 #include "frame_codec.hpp"
 
 #include <windows.h>
@@ -1319,6 +1320,21 @@ Json CommandDispatcher::capabilities_result() const {
         {"media_group_effect_routing", Json(true)},
         {"linear_effect_values", Json(true)},
         {"aup2_effect_manifest_version", Json(2001901)},
+        {"host",
+         Json(Json::Object{
+             {"required",
+              Json(static_cast<std::int64_t>(kRequiredHostVersion))},
+             {"sdk_frame_marks",
+              Json(host_version() >= kHostVersionSectionEndpoints)},
+             {"sdk_move_effect",
+              Json(host_version() >= kHostVersionMoveEffect)},
+             {"sdk_object_rendering",
+              Json(host_version() >= kHostVersionMoveEffect)},
+             {"sdk_section_endpoints",
+              Json(host_version() >= kHostVersionSectionEndpoints)},
+             {"version",
+              Json(static_cast<std::int64_t>(host_version()))},
+         })},
         {"sessions",
          Json(Json::Object{
              {"idempotent_mutations", Json(true)},

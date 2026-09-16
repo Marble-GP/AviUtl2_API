@@ -2,6 +2,7 @@
 #include "alias_tools.hpp"
 #include "bridge_constants.hpp"
 #include "command_dispatcher.hpp"
+#include "host_version.hpp"
 #include "instance_registry.hpp"
 #include "json.hpp"
 #include "pipe_server.hpp"
@@ -1718,6 +1719,63 @@ void test_instance_registry() {
     std::filesystem::remove(test_root, ignored);
 }
 
+void test_host_version_gates() {
+    FakeSdkAdapter sdk;
+    CommandDispatcher dispatcher(sdk, 4242U);
+
+    const auto capabilities = [&dispatcher]() {
+        return aviutl2::live::parse_json(dispatcher.handle_payload(
+            R"({"id":"caps","protocol_version":1,"method":"system.get_capabilities","params":{}})"));
+    };
+
+    aviutl2::live::store_host_version(0U);
+    {
+        const Json document = capabilities();
+        const Json* const host = document.find("result")->find("host");
+        require(
+            host->find("version")->as_integer() == 0 &&
+                host->find("required")->as_integer() ==
+                    static_cast<std::int64_t>(
+                        aviutl2::live::kRequiredHostVersion) &&
+                !host->find("sdk_frame_marks")->as_bool() &&
+                !host->find("sdk_move_effect")->as_bool() &&
+                !host->find("sdk_object_rendering")->as_bool() &&
+                !host->find("sdk_section_endpoints")->as_bool(),
+            "an unrecorded host version should keep every SDK gate off");
+    }
+
+    aviutl2::live::store_host_version(
+        aviutl2::live::kHostVersionMoveEffect);
+    {
+        const Json document = capabilities();
+        const Json* const host = document.find("result")->find("host");
+        require(
+            host->find("version")->as_integer() ==
+                    static_cast<std::int64_t>(
+                        aviutl2::live::kHostVersionMoveEffect) &&
+                host->find("sdk_move_effect")->as_bool() &&
+                host->find("sdk_object_rendering")->as_bool() &&
+                !host->find("sdk_frame_marks")->as_bool() &&
+                !host->find("sdk_section_endpoints")->as_bool(),
+            "a 2.1.3 host should enable move_effect and object rendering only");
+    }
+
+    aviutl2::live::store_host_version(
+        aviutl2::live::kHostVersionSectionEndpoints);
+    {
+        const Json document = capabilities();
+        const Json* const host = document.find("result")->find("host");
+        require(
+            host->find("sdk_frame_marks")->as_bool() &&
+                host->find("sdk_move_effect")->as_bool() &&
+                host->find("sdk_object_rendering")->as_bool() &&
+                host->find("sdk_section_endpoints")->as_bool(),
+            "a 2.1.4 host should enable section endpoints and frame marks");
+    }
+
+    aviutl2::live::store_host_version(0U);
+}
+
 int run_echo_server(const std::wstring& pipe_name) {
     std::atomic_bool request_seen = false;
     PipeServer server(
@@ -1756,6 +1814,7 @@ int main(const int argument_count, char** arguments) {
         test_json();
         test_host_snapshot_with_multi_layer_object();
         test_protocol_and_fixtures();
+        test_host_version_gates();
         test_sessions_events_and_audio();
         test_pipe_server();
         test_instance_registry();

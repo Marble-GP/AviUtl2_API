@@ -1,6 +1,7 @@
 #include "bridge_constants.hpp"
 #include "bridge_state.hpp"
 #include "api_lock.hpp"
+#include "host_version.hpp"
 #include "logger.hpp"
 
 #include <windows.h>
@@ -728,6 +729,8 @@ EXTERN_C __declspec(dllexport) void InitializeLogger(LOG_HANDLE* handle) {
 }
 
 EXTERN_C __declspec(dllexport) bool InitializePlugin(DWORD version) {
+    aviutl2::live::store_host_version(
+        static_cast<std::uint32_t>(version));
     return version >= RequiredVersion();
 }
 

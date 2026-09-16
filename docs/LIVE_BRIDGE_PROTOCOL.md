@@ -113,7 +113,10 @@ Returns `{"pong": true}`.
 
 Returns the protocol version, maximum payload, supported method names, native
 versus verified-Alias backends, release-gate blockers, and official SDK
-notification names.
+notification names. The `host` object reports the AviUtl2 version recorded by
+`InitializePlugin` and gates the trailing 2026-09-05 SDK members
+(`sdk_move_effect`, `sdk_object_rendering`, `sdk_section_endpoints`,
+`sdk_frame_marks`) so older hosts keep every gated feature off.
 
 ### `session.open` / `event.watch`
 

@@ -3,6 +3,7 @@ set(BRIDGE_SOURCES
     src/bridge_state.cpp
     src/command_dispatcher.cpp
     src/frame_codec.cpp
+    src/host_version.cpp
     src/instance_registry.cpp
     src/json.cpp
     src/logger.cpp
@@ -51,6 +52,7 @@ if(AVIUTL2_LIVE_BRIDGE_BUILD_TESTS)
         src/alias_tools.cpp
         src/command_dispatcher.cpp
         src/frame_codec.cpp
+        src/host_version.cpp
         src/instance_registry.cpp
         src/json.cpp
         src/logger.cpp
