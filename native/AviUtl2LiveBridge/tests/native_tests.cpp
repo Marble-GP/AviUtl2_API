@@ -12,6 +12,7 @@
 #include <windows.h>
 #include <plugin2.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -853,6 +854,237 @@ void test_json() {
             replaced.find("enabled=1") != std::string::npos &&
             replaced.find("color=ff00ff") != std::string::npos,
         "structural item replacement should preserve unrelated values");
+}
+
+struct HostEffectSlot {
+    const wchar_t* name;
+    int type;
+};
+
+std::array<HostEffectSlot, 4> host_effect_slots{{
+    {L"Blur", 1},
+    {L"Tone", 1},
+    {L"Zoom", 1},
+    {L"SceneChange", 3},
+}};
+
+HostObjectFixture host_reorder_fixture{
+    {1, 0, 59},
+    1,
+    "[Object]\r\n[Object.0]\r\neffect.name=Text\r\n"};
+
+EDIT_INFO host_reorder_edit_info{};
+EDIT_SECTION host_reorder_edit_section{};
+std::vector<EFFECT_HANDLE> host_live_effects;
+int host_move_effect_calls = 0;
+int host_move_effect_fail_on_call = 0;
+
+[[nodiscard]] OBJECT_HANDLE find_host_reorder_object(
+    const int layer, const int frame) {
+    if (host_reorder_fixture.range.layer <= layer &&
+        layer <= host_reorder_fixture.occupied_layer_end &&
+        host_reorder_fixture.range.end >= frame) {
+        return static_cast<OBJECT_HANDLE>(&host_reorder_fixture);
+    }
+    return nullptr;
+}
+
+void get_host_reorder_edit_info(EDIT_INFO* info, const int info_size) {
+    require(
+        info_size == static_cast<int>(sizeof(EDIT_INFO)),
+        "reorder host adapter should request complete edit information");
+    *info = host_reorder_edit_info;
+}
+
+[[nodiscard]] int get_host_reorder_edit_state() {
+    return EDIT_HANDLE::EDIT_STATE_EDIT;
+}
+
+[[nodiscard]] bool call_host_reorder_section(
+    void* parameter, void (*callback)(void*, EDIT_SECTION*)) {
+    callback(parameter, &host_reorder_edit_section);
+    return true;
+}
+
+[[nodiscard]] int get_host_reorder_section_num(OBJECT_HANDLE) {
+    return 1;
+}
+
+[[nodiscard]] int host_get_effect_list_for_reorder(
+    OBJECT_HANDLE, EFFECT_HANDLE* effect_list, const int effect_num) {
+    const int count = static_cast<int>(host_live_effects.size());
+    if (effect_list == nullptr) {
+        return count;
+    }
+    if (effect_num < count) {
+        return -1;
+    }
+    for (int index = 0; index < count; ++index) {
+        effect_list[index] =
+            host_live_effects[static_cast<std::size_t>(index)];
+    }
+    return count;
+}
+
+[[nodiscard]] LPCWSTR host_get_effect_name_for_reorder(
+    const EFFECT_HANDLE effect) {
+    return static_cast<const HostEffectSlot*>(effect)->name;
+}
+
+[[nodiscard]] int host_move_effect(
+    OBJECT_HANDLE, EFFECT_HANDLE effect, const int index) {
+    ++host_move_effect_calls;
+    const auto found = std::find(
+        host_live_effects.begin(), host_live_effects.end(), effect);
+    if (found == host_live_effects.end() ||
+        static_cast<const HostEffectSlot*>(effect)->type != 1 ||
+        host_move_effect_calls == host_move_effect_fail_on_call ||
+        index < 0 ||
+        static_cast<std::size_t>(index) > host_live_effects.size()) {
+        return -1;
+    }
+    host_live_effects.erase(found);
+    host_live_effects.insert(host_live_effects.begin() + index, effect);
+    return index;
+}
+
+void host_enum_effect_name_for_reorder(
+    void* parameter,
+    void (*callback)(void*, LPCWSTR, int, int)) {
+    for (const HostEffectSlot& slot : host_effect_slots) {
+        callback(parameter, slot.name, slot.type, 0);
+    }
+}
+
+void host_reset_reorder_effects() {
+    host_live_effects = {
+        &host_effect_slots[0],
+        &host_effect_slots[1],
+        &host_effect_slots[2],
+    };
+}
+
+void test_host_native_effect_reorder() {
+    host_reset_reorder_effects();
+    host_move_effect_calls = 0;
+    host_move_effect_fail_on_call = 0;
+
+    host_reorder_edit_info = {};
+    host_reorder_edit_info.width = 1920;
+    host_reorder_edit_info.height = 1080;
+    host_reorder_edit_info.rate = 30;
+    host_reorder_edit_info.scale = 1;
+    host_reorder_edit_info.sample_rate = 44100;
+    host_reorder_edit_info.frame_max = 59;
+    host_reorder_edit_info.layer_max = 1;
+    host_reorder_edit_info.scene_id = 9;
+
+    host_reorder_edit_section = {};
+    host_reorder_edit_section.find_object = find_host_reorder_object;
+    host_reorder_edit_section.get_object_layer_frame =
+        get_host_object_range;
+    host_reorder_edit_section.get_object_alias = get_host_object_alias;
+    host_reorder_edit_section.get_object_section_num =
+        get_host_reorder_section_num;
+    host_reorder_edit_section.get_effect_list =
+        host_get_effect_list_for_reorder;
+    host_reorder_edit_section.get_effect_name =
+        host_get_effect_name_for_reorder;
+    host_reorder_edit_section.move_effect = host_move_effect;
+
+    EDIT_HANDLE edit_handle{};
+    edit_handle.get_edit_info = get_host_reorder_edit_info;
+    edit_handle.get_edit_state = get_host_reorder_edit_state;
+    edit_handle.call_read_section_param = call_host_reorder_section;
+    edit_handle.call_edit_section_param = call_host_reorder_section;
+    edit_handle.enum_effect_name = host_enum_effect_name_for_reorder;
+
+    HostSdkAdapter adapter(&edit_handle);
+    const SnapshotResult snapshot = adapter.get_snapshot();
+    require(
+        snapshot.ok && snapshot.objects.size() == 1U,
+        "the reorder host fixture should expose one object");
+
+    aviutl2::live::store_host_version(
+        aviutl2::live::kHostVersionMoveEffect);
+    {
+        const StructuralEditResult moved = adapter.reorder_object_effects(
+            snapshot.revision, 0U, {L"Tone", L"Zoom", L"Blur"});
+        require(
+            moved.ok && moved.native_backend,
+            "a 2.1.3 host should reorder filter effects natively");
+        require(
+            moved.layer == 1 && moved.frame_start == 0 &&
+                moved.frame_end == 59,
+            "the native reorder should preserve the object placement");
+        require(
+            moved.effect_order.size() == 3U &&
+                moved.effect_order[0] == "Tone" &&
+                moved.effect_order[1] == "Zoom" &&
+                moved.effect_order[2] == "Blur",
+            "the native reorder should report the requested order");
+        require(
+            host_move_effect_calls == 2,
+            "the native reorder should issue exactly two moves");
+        require(
+            host_live_effects.size() == 3U &&
+                host_live_effects[0] == &host_effect_slots[1] &&
+                host_live_effects[1] == &host_effect_slots[2] &&
+                host_live_effects[2] == &host_effect_slots[0],
+            "the host effect order should match the request");
+    }
+
+    host_reset_reorder_effects();
+    host_move_effect_calls = 0;
+    host_move_effect_fail_on_call = 2;
+    {
+        const StructuralEditResult moved = adapter.reorder_object_effects(
+            snapshot.revision, 0U, {L"Tone", L"Zoom", L"Blur"});
+        require(
+            !moved.ok && moved.native_backend &&
+                moved.error_code == "STRUCTURAL_EDIT_FAILED",
+            "a rejected native move should fail closed");
+        require(
+            host_live_effects.size() == 3U &&
+                host_live_effects[0] == &host_effect_slots[0] &&
+                host_live_effects[1] == &host_effect_slots[1] &&
+                host_live_effects[2] == &host_effect_slots[2],
+            "a rejected native move should restore the original order");
+    }
+
+    host_reset_reorder_effects();
+    host_move_effect_calls = 0;
+    host_move_effect_fail_on_call = 0;
+    aviutl2::live::store_host_version(0U);
+    {
+        const StructuralEditResult moved = adapter.reorder_object_effects(
+            snapshot.revision, 0U, {L"Zoom", L"Blur", L"Tone"});
+        require(
+            !moved.ok &&
+                moved.error_code == "EDIT_SECTION_UNAVAILABLE" &&
+                host_move_effect_calls == 0,
+            "an unrecorded host version should keep the Alias path");
+    }
+
+    aviutl2::live::store_host_version(
+        aviutl2::live::kHostVersionMoveEffect);
+    host_live_effects = {
+        &host_effect_slots[0],
+        &host_effect_slots[1],
+        &host_effect_slots[3],
+    };
+    host_move_effect_calls = 0;
+    {
+        const StructuralEditResult moved = adapter.reorder_object_effects(
+            snapshot.revision, 0U, {L"SceneChange", L"Blur", L"Tone"});
+        require(
+            !moved.ok &&
+                moved.error_code == "EDIT_SECTION_UNAVAILABLE" &&
+                host_move_effect_calls == 0,
+            "a non-filter mover should keep the Alias path");
+    }
+
+    aviutl2::live::store_host_version(0U);
 }
 
 void test_protocol_and_fixtures() {
@@ -1813,6 +2045,7 @@ int main(const int argument_count, char** arguments) {
         }
         test_json();
         test_host_snapshot_with_multi_layer_object();
+        test_host_native_effect_reorder();
         test_protocol_and_fixtures();
         test_host_version_gates();
         test_sessions_events_and_audio();

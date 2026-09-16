@@ -3,6 +3,7 @@
 #include "api_lock.hpp"
 #include "alias_tools.hpp"
 #include "bridge_constants.hpp"
+#include "host_version.hpp"
 #include "json.hpp"
 
 #include <windows.h>
@@ -2063,6 +2064,136 @@ struct StructuralEditContext final {
     StructuralEditResult result;
 };
 
+void apply_native_effect_reorder(
+    StructuralEditContext& context,
+    EDIT_SECTION* edit,
+    const CapturedObject& object,
+    const std::vector<EFFECT_HANDLE>& effect_handles,
+    const std::vector<std::size_t>& order,
+    const std::vector<std::wstring>& effect_names) {
+    context.result.native_backend = true;
+
+    std::vector<std::wstring> expected_effect_names;
+    expected_effect_names.reserve(order.size());
+    for (const std::size_t old_index : order) {
+        expected_effect_names.push_back(
+            effect_names[old_index]);
+    }
+
+    struct AppliedMove final {
+        EFFECT_HANDLE handle = nullptr;
+        int previous_index = 0;
+    };
+    std::vector<AppliedMove> applied;
+    std::vector<EFFECT_HANDLE> live = effect_handles;
+
+    const auto rollback = [&]() {
+        bool restored = true;
+        for (auto move = applied.rbegin();
+             move != applied.rend(); ++move) {
+            if (edit->move_effect(
+                    object.handle,
+                    move->handle,
+                    move->previous_index) !=
+                move->previous_index) {
+                restored = false;
+            }
+        }
+        if (restored) {
+            std::vector<EFFECT_HANDLE> handles(
+                effect_handles.size());
+            if (edit->get_effect_list(
+                    object.handle,
+                    handles.data(),
+                    static_cast<int>(handles.size())) !=
+                    static_cast<int>(handles.size()) ||
+                handles != effect_handles) {
+                restored = false;
+            }
+        }
+        return restored;
+    };
+
+    for (std::size_t target = 0U; target < order.size();
+         ++target) {
+        const EFFECT_HANDLE wanted =
+            effect_handles[order[target]];
+        const auto found =
+            std::find(live.begin(), live.end(), wanted);
+        if (found == live.end()) {
+            context.result.error_code =
+                "HOST_INSPECTION_FAILED";
+            context.result.error_message =
+                "AviUtl2 reported an effect that is no longer attached to the object.";
+            return;
+        }
+        const int previous_index =
+            static_cast<int>(found - live.begin());
+        if (previous_index == static_cast<int>(target)) {
+            continue;
+        }
+        const int moved_index = edit->move_effect(
+            object.handle, wanted, static_cast<int>(target));
+        if (moved_index != static_cast<int>(target)) {
+            const bool restored = rollback();
+            context.result.error_code =
+                restored
+                    ? "STRUCTURAL_EDIT_FAILED"
+                    : "STRUCTURAL_EDIT_ROLLBACK_FAILED";
+            context.result.error_message =
+                restored
+                    ? "AviUtl2 rejected the native effect move and the original order was restored."
+                    : "AviUtl2 rejected the native effect move and the original order could not be restored.";
+            return;
+        }
+        live.erase(live.begin() + previous_index);
+        live.insert(
+            live.begin() + static_cast<int>(target), wanted);
+        applied.push_back(AppliedMove{wanted, previous_index});
+    }
+
+    std::vector<EFFECT_HANDLE> final_handles(live.size());
+    if (edit->get_effect_list(
+            object.handle,
+            final_handles.data(),
+            static_cast<int>(final_handles.size())) !=
+            static_cast<int>(final_handles.size()) ||
+        final_handles != live) {
+        const bool restored = rollback();
+        context.result.error_code =
+            restored
+                ? "STRUCTURAL_EDIT_FAILED"
+                : "STRUCTURAL_EDIT_ROLLBACK_FAILED";
+        context.result.error_message =
+            restored
+                ? "The final effect order could not be verified and the original order was restored."
+                : "The final effect order could not be verified and the original order could not be restored.";
+        return;
+    }
+    for (std::size_t index = 0U; index < final_handles.size();
+         ++index) {
+        const LPCWSTR name =
+            edit->get_effect_name(final_handles[index]);
+        if (name == nullptr ||
+            expected_effect_names[index] != name) {
+            const bool restored = rollback();
+            context.result.error_code =
+                restored
+                    ? "STRUCTURAL_EDIT_FAILED"
+                    : "STRUCTURAL_EDIT_ROLLBACK_FAILED";
+            context.result.error_message =
+                restored
+                    ? "The final effect order did not match the request and the original order was restored."
+                    : "The final effect order did not match the request and the original order could not be restored.";
+            return;
+        }
+    }
+    context.result.layer = object.layer;
+    context.result.frame_start = object.frame_start;
+    context.result.frame_end = object.frame_end;
+    context.result.ok = true;
+}
+
 void structural_edit_callback(
     void* parameter,
     EDIT_SECTION* edit) noexcept {
@@ -2101,16 +2232,11 @@ void structural_edit_callback(
         }
         if (edit == nullptr ||
             edit->get_effect_list == nullptr ||
-            edit->get_effect_name == nullptr ||
-            edit->get_object_alias == nullptr ||
-            edit->create_object_from_alias == nullptr ||
-            edit->delete_object == nullptr ||
-            edit->move_object == nullptr ||
-            edit->get_object_layer_frame == nullptr) {
+            edit->get_effect_name == nullptr) {
             context.result.error_code =
                 "EDIT_SECTION_UNAVAILABLE";
             context.result.error_message =
-                "The AviUtl2 structural replacement APIs are unavailable.";
+                "The AviUtl2 effect inspection APIs are unavailable.";
             return;
         }
         if (edit->get_layer_lock != nullptr &&
@@ -2352,6 +2478,54 @@ void structural_edit_callback(
                     return;
                 }
             }
+            bool native_reorder =
+                host_version() >= kHostVersionMoveEffect &&
+                edit->move_effect != nullptr;
+            if (native_reorder) {
+                for (std::size_t new_index = 0U;
+                     new_index < order.size();
+                     ++new_index) {
+                    const std::size_t old_index = order[new_index];
+                    if (old_index == new_index) {
+                        continue;
+                    }
+                    // The SDK move_effect() member only moves filter
+                    // effects; every other mover keeps the Alias path.
+                    if (context.effect_types->find(
+                            effect_names[old_index])->second != 1) {
+                        native_reorder = false;
+                        break;
+                    }
+                }
+            }
+            if (native_reorder) {
+                context.result.effect_order.reserve(
+                    context.selectors->size());
+                for (const std::wstring& selector :
+                     *context.selectors) {
+                    context.result.effect_order.push_back(
+                        wide_to_utf8(selector));
+                }
+                apply_native_effect_reorder(
+                    context,
+                    edit,
+                    object,
+                    effect_handles,
+                    order,
+                    effect_names);
+                return;
+            }
+            if (edit->get_object_alias == nullptr ||
+                edit->create_object_from_alias == nullptr ||
+                edit->delete_object == nullptr ||
+                edit->move_object == nullptr ||
+                edit->get_object_layer_frame == nullptr) {
+                context.result.error_code =
+                    "EDIT_SECTION_UNAVAILABLE";
+                context.result.error_message =
+                    "The AviUtl2 structural replacement APIs are unavailable.";
+                return;
+            }
             replacement_alias =
                 reorder_object_alias_effects(
                     replacement_alias,
@@ -2369,6 +2543,18 @@ void structural_edit_callback(
                 context.result.effect_order.push_back(
                     wide_to_utf8(selector));
             }
+        }
+
+        if (edit->get_object_alias == nullptr ||
+            edit->create_object_from_alias == nullptr ||
+            edit->delete_object == nullptr ||
+            edit->move_object == nullptr ||
+            edit->get_object_layer_frame == nullptr) {
+            context.result.error_code =
+                "EDIT_SECTION_UNAVAILABLE";
+            context.result.error_message =
+                "The AviUtl2 structural replacement APIs are unavailable.";
+            return;
         }
 
         for (std::size_t index = 0U;

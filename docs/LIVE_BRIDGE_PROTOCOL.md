@@ -299,6 +299,11 @@ the user for GUI Undo when `gui_undo_required` is true.
   `object.section.list/create/delete/move`.
 - Verified structural editing: `object.set_duration`, `media.trim`,
   `object.effect.reorder`, and the existing guarded `object.split_media`.
+  On AviUtl2 2.1.3+ the bridge applies `object.effect.reorder` natively with
+  the SDK `move_effect()` member and reports `backend: "sdk_move_effect"`.
+  A reorder that moves a non-filter effect (scene transition or object
+  control) keeps the verified Alias-replacement backend on every host, and
+  the receipt's `backend` field always reports the backend actually used.
 - Timeline: `timeline.transaction.validate/apply`, `timeline.shift_after`,
   `timeline.ripple_insert/delete`, and `timeline.close_gap`.
 - Assets/review: `media.relink`, `audio.render/read_chunk/release`, and

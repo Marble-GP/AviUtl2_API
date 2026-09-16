@@ -1446,7 +1446,8 @@ Json CommandDispatcher::capabilities_result() const {
              {"duration",
               Json("verified_alias_replacement")},
              {"native_duration_setter", Json(false)},
-             {"native_effect_reorder", Json(false)},
+             {"native_effect_reorder",
+              Json(host_version() >= kHostVersionMoveEffect)},
              {"native_split", Json(false)},
              {"unsafe_objects_fail_closed", Json(true)},
          })},
@@ -1484,7 +1485,9 @@ Json CommandDispatcher::capabilities_result() const {
              {"initial_items_atomic", Json(true)},
              {"reorder", Json(true)},
              {"reorder_backend",
-              Json("verified_alias_replacement")},
+              Json(host_version() >= kHostVersionMoveEffect
+                       ? "sdk_move_effect"
+                       : "verified_alias_replacement")},
              {"selector_from_inspection", Json(true)},
              {"set_enabled", Json(true)},
          })},
@@ -4240,7 +4243,10 @@ std::string CommandDispatcher::handle_structural_edit(
     return make_success_response(
         request.id,
         Json(Json::Object{
-            {"backend", Json("verified_alias_replacement")},
+            {"backend",
+             Json(result.native_backend
+                      ? "sdk_move_effect"
+                      : "verified_alias_replacement")},
             {"effect_order", Json(std::move(effect_order))},
             {"frame_end", Json(result.frame_end)},
             {"frame_start", Json(result.frame_start)},
@@ -4259,9 +4265,11 @@ std::string CommandDispatcher::handle_structural_edit(
             {"undo_unit", Json("single_edit_section")},
             {"undo_grouped", Json(true)},
             {"warnings",
-             Json(Json::Array{
-                 Json("SDK_NATIVE_SETTER_UNAVAILABLE"),
-             })},
+             result.native_backend
+                 ? Json(Json::Array{})
+                 : Json(Json::Array{
+                       Json("SDK_NATIVE_SETTER_UNAVAILABLE"),
+                   })},
         }));
 }
 
