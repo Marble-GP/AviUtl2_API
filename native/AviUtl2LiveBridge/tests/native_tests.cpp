@@ -456,6 +456,46 @@ public:
         return result;
     }
 
+    [[nodiscard]] RenderedFrameResult render_object_frame(
+        const std::int64_t expected_revision,
+        const std::size_t object_index,
+        const int frame,
+        const bool apply_effect) noexcept override {
+        ++object_render_calls;
+        last_object_index = object_index;
+        last_apply_effect = apply_effect;
+        RenderedFrameResult result = render_result;
+        result.frame = frame;
+        if (expected_revision != 123) {
+            result.ok = false;
+            result.error_code = "STALE_PROJECT_STATE";
+            result.error_message = "The project changed.";
+            return result;
+        }
+        if (object_render_fail_stale) {
+            result.ok = false;
+            result.error_code = "STALE_PROJECT_STATE";
+            result.error_message = "The project changed.";
+        }
+        return result;
+    }
+
+    [[nodiscard]] RenderedAudioResult render_object_audio(
+        const std::int64_t /*expected_revision*/,
+        const std::size_t object_index,
+        const int frame_start,
+        const int frame_end,
+        const bool apply_effect) noexcept override {
+        ++object_audio_render_calls;
+        last_object_index = object_index;
+        last_apply_effect = apply_effect;
+        RenderedAudioResult result = audio_render_result;
+        result.frame_start = frame_start;
+        result.frame_end = frame_end;
+        return result;
+    }
+
+
     [[nodiscard]] FrameMarksResult get_frame_marks() noexcept override {
         return frame_marks_result;
     }
@@ -710,6 +750,12 @@ public:
     int inspect_calls = 0;
     int render_calls = 0;
     int audio_render_calls = 0;
+
+    int object_render_calls = 0;
+    int object_audio_render_calls = 0;
+    bool last_apply_effect = false;
+    bool object_render_fail_stale = false;
+
     int plan_calls = 0;
     bool last_plan_apply = false;
 };
@@ -1738,6 +1784,39 @@ void test_protocol_and_fixtures() {
             ->find("released")
             ->as_bool(),
         "frame capture should be explicitly releasable");
+
+    const Json object_render_json = aviutl2::live::parse_json(
+        dispatcher.handle_payload(
+            R"({"id":"orender","protocol_version":1,"method":"object.render_frame","params":{"expected_revision":123,"target":{"object_id":"obj-123-0"},"frame":12,"apply_effect":false}})"));
+    require(
+        object_render_json.find("result")
+                    ->find("capture_id")
+                    ->as_string() == "cap-4242-2" &&
+            object_render_json.find("result")
+                    ->find("object_index")
+                    ->as_integer() == 0 &&
+            object_render_json.find("result")
+                    ->find("apply_effect")
+                    ->as_bool() == false &&
+            sdk.object_render_calls == 1 &&
+            sdk.last_frame == 12 &&
+            sdk.last_revision == 123 &&
+            sdk.last_object_index == 0U &&
+            sdk.last_apply_effect == false,
+        "object frame render should create a capture scoped to the object");
+    sdk.object_render_fail_stale = true;
+    const Json object_render_stale_json = aviutl2::live::parse_json(
+        dispatcher.handle_payload(
+            R"({"id":"orender2","protocol_version":1,"method":"object.render_frame","params":{"expected_revision":123,"target":{"object_id":"obj-123-0"},"frame":12}})"));
+    require(
+        object_render_stale_json.find("error")
+                    ->find("code")
+                    ->as_string() == "STALE_PROJECT_STATE" &&
+            sdk.object_render_calls == 2,
+        "object frame render should reject a stale revision before rendering");
+    sdk.object_render_fail_stale = false;
+
+
 
     const Json set_items_json = aviutl2::live::parse_json(
         dispatcher.handle_payload(

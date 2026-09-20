@@ -1079,6 +1079,190 @@ def test_set_playback_rate_refuses_unimplemented_duration_replacement() -> None:
     assert stream.written == b""
 
 
+def test_render_object_frame_reassembles_and_verifies_native_png(
+    tmp_path: Path,
+) -> None:
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC"
+        "AAAAC0lEQVR42mP8/x8AAusB9Y9ZlKsAAAAASUVORK5CYII="
+    )
+    digest = hashlib.sha256(png).hexdigest()
+    render_result = {
+        "apply_effect": False,
+        "byte_size": len(png),
+        "capture_id": "cap-99-2",
+        "chunk_bytes": 524288,
+        "chunk_count": 1,
+        "format": "png",
+        "frame": 12,
+        "height": 1,
+        "native_renderer": True,
+        "object_index": 0,
+        "revision": 500,
+        "scene_id": 0,
+        "sha256": digest,
+        "ttl_seconds": 60,
+        "width": 1,
+    }
+    chunk_result = {
+        "byte_offset": 0,
+        "capture_id": "cap-99-2",
+        "data_base64": base64.b64encode(png).decode("ascii"),
+        "data_size": len(png),
+        "eof": True,
+        "index": 0,
+    }
+    responses = (
+        encode_frame(
+            json.dumps(
+                {"id": "py-00000001", "ok": True, "result": render_result}
+            ).encode()
+        )
+        + encode_frame(
+            json.dumps(
+                {"id": "py-00000002", "ok": True, "result": chunk_result}
+            ).encode()
+        )
+        + encode_frame(b'{"id":"py-00000003","ok":true,"result":{"released":true}}')
+    )
+    stream = ScriptedStream(responses, write_chunk=4096)
+    client = LiveClient(FramedTransport(stream))
+    obj = SnapshotObject(
+        object_id="obj-500-0",
+        revision=500,
+        layer=0,
+        frame_start=10,
+        frame_end=19,
+        name=None,
+        alias="[Object]\r\n",
+    )
+    destination = tmp_path / "object.png"
+
+    rendered = client.render_object_frame(
+        obj,
+        frame=12,
+        apply_effect=False,
+        output_path=destination,
+    )
+
+    assert rendered.png == png
+    assert rendered.sha256 == digest
+    assert rendered.revision == 500
+    assert rendered.frame == 12
+    assert destination.read_bytes() == png
+
+
+def test_render_object_audio_reassembles_and_verifies_native_pcm(
+    tmp_path: Path,
+) -> None:
+    pcm = b"\x00\x00\x80\x3f" * 8
+    digest = hashlib.sha256(pcm).hexdigest()
+    render_result = {
+        "apply_effect": True,
+        "byte_size": len(pcm),
+        "capture_id": "acap-99-1",
+        "chunk_bytes": 524288,
+        "chunk_count": 1,
+        "channels": 2,
+        "format": "f32le",
+        "frame_end": 19,
+        "frame_start": 10,
+        "native_renderer": True,
+        "object_index": 0,
+        "revision": 500,
+        "sample_count": 4,
+        "sample_rate": 48000,
+        "scene_id": 0,
+        "sha256": digest,
+        "ttl_seconds": 60,
+    }
+    chunk_result = {
+        "byte_offset": 0,
+        "capture_id": "acap-99-1",
+        "data_base64": base64.b64encode(pcm).decode("ascii"),
+        "data_size": len(pcm),
+        "eof": True,
+        "index": 0,
+    }
+    responses = (
+        encode_frame(
+            json.dumps(
+                {"id": "py-00000001", "ok": True, "result": render_result}
+            ).encode()
+        )
+        + encode_frame(
+            json.dumps(
+                {"id": "py-00000002", "ok": True, "result": chunk_result}
+            ).encode()
+        )
+        + encode_frame(b'{"id":"py-00000003","ok":true,"result":{"released":true}}')
+    )
+    stream = ScriptedStream(responses, write_chunk=4096)
+    client = LiveClient(FramedTransport(stream))
+    obj = SnapshotObject(
+        object_id="obj-500-0",
+        revision=500,
+        layer=0,
+        frame_start=10,
+        frame_end=19,
+        name=None,
+        alias="[Object]\r\n",
+    )
+    destination = tmp_path / "object.pcm"
+
+    rendered = client.render_object_audio(
+        obj,
+        frame_start=10,
+        frame_end=19,
+        output_path=destination,
+    )
+
+    assert rendered.pcm_f32le == pcm
+    assert rendered.sha256 == digest
+    assert rendered.revision == 500
+    assert rendered.sample_rate == 48000
+    assert rendered.sample_count == 4
+    assert destination.read_bytes() == pcm
+
+
+def test_render_object_audio_rejects_invalid_range_before_writing() -> None:
+    stream = ScriptedStream(b"")
+    client = LiveClient(FramedTransport(stream))
+    obj = SnapshotObject(
+        object_id="obj-500-0",
+        revision=500,
+        layer=0,
+        frame_start=10,
+        frame_end=19,
+        name=None,
+        alias="[Object]\r\n",
+    )
+
+    with pytest.raises(ValueError):
+        client.render_object_audio(obj, frame_start=19, frame_end=10)
+
+    assert stream.written == b""
+
+
+def test_render_object_frame_rejects_invalid_frame_before_writing() -> None:
+    stream = ScriptedStream(b"")
+    client = LiveClient(FramedTransport(stream))
+    obj = SnapshotObject(
+        object_id="obj-500-0",
+        revision=500,
+        layer=0,
+        frame_start=10,
+        frame_end=19,
+        name=None,
+        alias="[Object]\r\n",
+    )
+
+    with pytest.raises(ValueError):
+        client.render_object_frame(obj, frame=-1)
+
+    assert stream.written == b""
+
+
 def test_render_frame_reassembles_and_verifies_native_png(
     tmp_path: Path,
 ) -> None:

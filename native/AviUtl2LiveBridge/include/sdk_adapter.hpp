@@ -609,6 +609,21 @@ public:
     [[nodiscard]] virtual RenderedAudioResult render_audio(
         int frame_start,
         int frame_end) noexcept = 0;
+    // Renders a single object by index. The object handle is resolved inside
+    // a read section (with expected_revision validation) and the rendering
+    // request is issued outside the section, matching the SDK guidance that
+    // blocking inside a section can deadlock. Requires host >= 2.1.3.
+    [[nodiscard]] virtual RenderedFrameResult render_object_frame(
+        std::int64_t expected_revision,
+        std::size_t object_index,
+        int frame,
+        bool apply_effect) noexcept = 0;
+    [[nodiscard]] virtual RenderedAudioResult render_object_audio(
+        std::int64_t expected_revision,
+        std::size_t object_index,
+        int frame_start,
+        int frame_end,
+        bool apply_effect) noexcept = 0;
     [[nodiscard]] virtual FrameMarksResult get_frame_marks() noexcept = 0;
     [[nodiscard]] virtual MarkEditResult set_frame_mark(
         std::int64_t expected_revision,
@@ -750,6 +765,18 @@ public:
     [[nodiscard]] RenderedAudioResult render_audio(
         int frame_start,
         int frame_end) noexcept override;
+    [[nodiscard]] RenderedFrameResult render_object_frame(
+        std::int64_t expected_revision,
+        std::size_t object_index,
+        int frame,
+        bool apply_effect) noexcept override;
+    [[nodiscard]] RenderedAudioResult render_object_audio(
+        std::int64_t expected_revision,
+        std::size_t object_index,
+        int frame_start,
+        int frame_end,
+        bool apply_effect) noexcept override;
+
     [[nodiscard]] FrameMarksResult get_frame_marks() noexcept override;
     [[nodiscard]] MarkEditResult set_frame_mark(
         std::int64_t expected_revision,
@@ -773,3 +800,4 @@ private:
 [[nodiscard]] std::string edit_state_name(EditState state);
 
 }  // namespace aviutl2::live
+

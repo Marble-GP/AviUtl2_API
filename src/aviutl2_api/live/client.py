@@ -1116,6 +1116,282 @@ class LiveClient:
             result.save_pcm(output_path, overwrite=overwrite)
         return result
 
+    def render_object_frame(
+        self,
+        obj: SnapshotObject,
+        *,
+        frame: int,
+        apply_effect: bool = True,
+        output_path: str | PathLike[str] | None = None,
+        overwrite: bool = False,
+        timeout: float = 30.0,
+    ) -> RenderedFrame:
+        """Render a single object with AviUtl2 and retrieve a verified PNG."""
+        if frame < 0:
+            raise ValueError("frame must be non-negative")
+        params = obj.target_params()
+        params["frame"] = frame
+        params["apply_effect"] = apply_effect
+        metadata = self.call("object.render_frame", params, timeout=timeout)
+        capture_id = metadata.get("capture_id")
+        byte_size = metadata.get("byte_size")
+        chunk_count = metadata.get("chunk_count")
+        width = metadata.get("width")
+        height = metadata.get("height")
+        scene_id = metadata.get("scene_id")
+        revision = metadata.get("revision")
+        digest = metadata.get("sha256")
+        returned_frame = metadata.get("frame")
+        native_renderer = metadata.get("native_renderer")
+        integer_values = (
+            byte_size,
+            chunk_count,
+            width,
+            height,
+            scene_id,
+            revision,
+            returned_frame,
+        )
+        if (
+            not isinstance(capture_id, str)
+            or not capture_id
+            or any(
+                not isinstance(value, int) or isinstance(value, bool)
+                for value in integer_values
+            )
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or native_renderer is not True
+        ):
+            raise ConnectionError(
+                "Live Bridge returned invalid object frame render metadata"
+            )
+        assert isinstance(byte_size, int)
+        assert isinstance(chunk_count, int)
+        assert isinstance(width, int)
+        assert isinstance(height, int)
+        assert isinstance(scene_id, int)
+        assert isinstance(revision, int)
+        assert isinstance(returned_frame, int)
+        assert isinstance(digest, str)
+        if (
+            returned_frame != frame
+            or byte_size <= 0
+            or chunk_count <= 0
+            or width <= 0
+            or height <= 0
+            or revision <= 0
+        ):
+            raise ConnectionError(
+                "Live Bridge returned invalid object frame render metadata"
+            )
+
+        chunks: list[bytes] = []
+        received = 0
+        try:
+            for index in range(chunk_count):
+                chunk = self.call(
+                    "frame.read_chunk",
+                    {"capture_id": capture_id, "index": index},
+                    timeout=timeout,
+                )
+                encoded = chunk.get("data_base64")
+                data_size = chunk.get("data_size")
+                byte_offset = chunk.get("byte_offset")
+                returned_index = chunk.get("index")
+                eof = chunk.get("eof")
+                if (
+                    not isinstance(encoded, str)
+                    or not isinstance(data_size, int)
+                    or isinstance(data_size, bool)
+                    or not isinstance(byte_offset, int)
+                    or isinstance(byte_offset, bool)
+                    or returned_index != index
+                    or byte_offset != received
+                    or not isinstance(eof, bool)
+                    or eof != (index + 1 == chunk_count)
+                ):
+                    raise ConnectionError(
+                        "Live Bridge returned invalid frame chunk metadata"
+                    )
+                try:
+                    decoded = base64.b64decode(encoded, validate=True)
+                except ValueError as error:
+                    raise ConnectionError(
+                        "Live Bridge returned invalid frame chunk base64"
+                    ) from error
+                if len(decoded) != data_size:
+                    raise ConnectionError("Live Bridge frame chunk size does not match")
+                chunks.append(decoded)
+                received += len(decoded)
+        finally:
+            self.call(
+                "frame.release",
+                {"capture_id": capture_id},
+                timeout=timeout,
+            )
+
+        png = b"".join(chunks)
+        if (
+            len(png) != byte_size
+            or not png.startswith(b"\x89PNG\r\n\x1a\n")
+            or hashlib.sha256(png).hexdigest() != digest
+        ):
+            raise ConnectionError(
+                "Live Bridge rendered PNG failed integrity validation"
+            )
+        result = RenderedFrame(
+            frame=frame,
+            width=width,
+            height=height,
+            scene_id=scene_id,
+            revision=revision,
+            sha256=digest,
+            png=png,
+        )
+        if output_path is not None:
+            result.save(Path(output_path), overwrite=overwrite)
+        return result
+
+    def render_object_audio(
+        self,
+        obj: SnapshotObject,
+        *,
+        frame_start: int,
+        frame_end: int,
+        apply_effect: bool = True,
+        output_path: str | PathLike[str] | None = None,
+        overwrite: bool = False,
+        timeout: float = 120.0,
+    ) -> RenderedAudio:
+        """Render revision-bound native stereo float PCM for one object."""
+        if frame_start < 0 or frame_end < frame_start:
+            raise ValueError("frame_start/frame_end form an invalid range")
+        params = obj.target_params()
+        params["frame_start"] = frame_start
+        params["frame_end"] = frame_end
+        params["apply_effect"] = apply_effect
+        metadata = self.call("object.render_audio", params, timeout=timeout)
+        capture_id = metadata.get("capture_id")
+        integer_names = (
+            "byte_size",
+            "chunk_count",
+            "sample_rate",
+            "sample_count",
+            "scene_id",
+            "revision",
+            "frame_start",
+            "frame_end",
+        )
+        integer_values = tuple(metadata.get(name) for name in integer_names)
+        digest = metadata.get("sha256")
+        if (
+            not isinstance(capture_id, str)
+            or not capture_id
+            or any(
+                not isinstance(value, int) or isinstance(value, bool)
+                for value in integer_values
+            )
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or metadata.get("format") != "f32le"
+            or metadata.get("channels") != 2
+            or metadata.get("native_renderer") is not True
+        ):
+            raise ConnectionError(
+                "Live Bridge returned invalid object audio render metadata"
+            )
+        (
+            byte_size,
+            chunk_count,
+            sample_rate,
+            sample_count,
+            scene_id,
+            revision,
+            returned_start,
+            returned_end,
+        ) = integer_values
+        assert isinstance(byte_size, int)
+        assert isinstance(chunk_count, int)
+        assert isinstance(sample_rate, int)
+        assert isinstance(sample_count, int)
+        assert isinstance(scene_id, int)
+        assert isinstance(revision, int)
+        assert isinstance(returned_start, int)
+        assert isinstance(returned_end, int)
+        if (
+            byte_size <= 0
+            or byte_size != sample_count * 2 * 4
+            or chunk_count <= 0
+            or sample_rate <= 0
+            or revision <= 0
+            or returned_start != frame_start
+            or returned_end != frame_end
+        ):
+            raise ConnectionError(
+                "Live Bridge returned inconsistent object audio render metadata"
+            )
+
+        chunks: list[bytes] = []
+        received = 0
+        try:
+            for index in range(chunk_count):
+                chunk = self.call(
+                    "audio.read_chunk",
+                    {"capture_id": capture_id, "index": index},
+                    timeout=timeout,
+                )
+                encoded = chunk.get("data_base64")
+                data_size = chunk.get("data_size")
+                byte_offset = chunk.get("byte_offset")
+                if (
+                    not isinstance(encoded, str)
+                    or not isinstance(data_size, int)
+                    or isinstance(data_size, bool)
+                    or not isinstance(byte_offset, int)
+                    or isinstance(byte_offset, bool)
+                    or chunk.get("index") != index
+                    or byte_offset != received
+                    or chunk.get("eof") != (index + 1 == chunk_count)
+                ):
+                    raise ConnectionError(
+                        "Live Bridge returned invalid audio chunk metadata"
+                    )
+                try:
+                    decoded = base64.b64decode(encoded, validate=True)
+                except ValueError as error:
+                    raise ConnectionError(
+                        "Live Bridge returned invalid audio chunk base64"
+                    ) from error
+                if len(decoded) != data_size:
+                    raise ConnectionError("Live Bridge audio chunk size does not match")
+                chunks.append(decoded)
+                received += len(decoded)
+        finally:
+            self.call(
+                "audio.release",
+                {"capture_id": capture_id},
+                timeout=timeout,
+            )
+        pcm = b"".join(chunks)
+        if len(pcm) != byte_size or hashlib.sha256(pcm).hexdigest() != digest:
+            raise ConnectionError(
+                "Live Bridge rendered PCM failed integrity validation"
+            )
+        result = RenderedAudio(
+            frame_start=frame_start,
+            frame_end=frame_end,
+            sample_rate=sample_rate,
+            sample_count=sample_count,
+            scene_id=scene_id,
+            revision=revision,
+            sha256=digest,
+            pcm_f32le=pcm,
+        )
+        if output_path is not None:
+            result.save_pcm(output_path, overwrite=overwrite)
+        return result
+
     def _find_inspected_item(
         self,
         obj: SnapshotObject,

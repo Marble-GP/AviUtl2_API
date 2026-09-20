@@ -158,6 +158,11 @@ private:
         const Request& request);
     [[nodiscard]] std::string handle_audio_release(
         const Request& request);
+    [[nodiscard]] std::string handle_object_frame_render(
+        const Request& request);
+    [[nodiscard]] std::string handle_object_audio_render(
+        const Request& request);
+
     [[nodiscard]] std::string handle_marks(
         const Request& request,
         bool edit);

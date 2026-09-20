@@ -3549,6 +3549,55 @@ void enum_item_callback(
     }
 }
 
+// Object-level rendering: resolves the object handle inside a read section,
+// then issues the asynchronous rendering request outside the section because
+// the SDK guidance warns that blocking inside a section can deadlock.
+struct ObjectRenderContext final {
+    EDIT_HANDLE* edit_handle = nullptr;
+    std::int64_t expected_revision = 0;
+    std::size_t object_index = 0U;
+    OBJECT_HANDLE handle = nullptr;
+    bool resolved = false;
+    bool stale = false;
+    bool not_found = false;
+    bool unavailable = false;
+};
+
+void resolve_object_callback(
+    void* parameter,
+    EDIT_SECTION* edit) noexcept {
+    auto& context =
+        *static_cast<ObjectRenderContext*>(parameter);
+    try {
+        std::string error_code;
+        std::string error_message;
+        CapturedTimeline timeline;
+        if (!capture_timeline(
+                context.edit_handle,
+                edit,
+                timeline,
+                error_code,
+                error_message)) {
+            context.unavailable = true;
+            return;
+        }
+        if (timeline.revision != context.expected_revision) {
+            context.stale = true;
+            return;
+        }
+        if (context.object_index >= timeline.objects.size()) {
+            context.not_found = true;
+            return;
+        }
+        context.handle =
+            timeline.objects[context.object_index].handle;
+        context.resolved = context.handle != nullptr;
+    } catch (...) {
+        context.unavailable = true;
+    }
+}
+
+
 struct InspectContext final {
     EDIT_HANDLE* edit_handle = nullptr;
     std::int64_t expected_revision = 0;
@@ -7892,6 +7941,287 @@ RenderedAudioResult HostSdkAdapter::render_audio(
     }
     return result;
 }
+
+namespace {
+
+// Renders one object by snapshot index. The handle is resolved inside a read
+// section (with expected_revision validation) and the asynchronous rendering
+// request is issued outside the section; the SDK warns that blocking inside a
+// section while the event thread completes the render can deadlock.
+enum class ObjectRenderFailure {
+    none,
+    stopping,
+    unavailable,
+    stale,
+    not_found,
+};
+
+ObjectRenderFailure resolve_render_object(
+    EDIT_HANDLE* edit_handle,
+    std::int64_t expected_revision,
+    std::size_t object_index,
+    OBJECT_HANDLE& out_handle) noexcept {
+    if (edit_handle == nullptr ||
+        edit_handle->call_read_section_param == nullptr) {
+        return ObjectRenderFailure::unavailable;
+    }
+    ObjectRenderContext context{
+        edit_handle,
+        expected_revision,
+        object_index,
+        nullptr,
+        false,
+        false,
+        false,
+        false,
+    };
+    if (!edit_handle->call_read_section_param(
+            &context,
+            resolve_object_callback)) {
+        return ObjectRenderFailure::unavailable;
+    }
+    if (context.stale) {
+        return ObjectRenderFailure::stale;
+    }
+    if (context.not_found || !context.resolved) {
+        return ObjectRenderFailure::not_found;
+    }
+    out_handle = context.handle;
+    return ObjectRenderFailure::none;
+}
+
+}  // namespace
+
+RenderedFrameResult HostSdkAdapter::render_object_frame(
+    const std::int64_t expected_revision,
+    const std::size_t object_index,
+    const int frame,
+    const bool apply_effect) noexcept {
+    RenderedFrameResult result;
+    result.frame = frame;
+    if (stopping_.load(std::memory_order_acquire)) {
+        result.error_code = "BRIDGE_STOPPING";
+        result.error_message =
+            "The bridge stopped before object rendering.";
+        result.retryable = true;
+        return result;
+    }
+    if (edit_handle_ == nullptr ||
+        host_version() < kHostVersionMoveEffect ||
+        edit_handle_->rendering_object_video == nullptr) {
+        result.error_code = "OBJECT_RENDERING_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 object rendering API requires host 2.1.3 or newer.";
+        result.retryable = true;
+        return result;
+    }
+    if (get_edit_state() == EditState::save) {
+        result.error_code = "HOST_EXPORTING";
+        result.error_message = "AviUtl2 is currently exporting.";
+        result.retryable = true;
+        return result;
+    }
+    OBJECT_HANDLE handle = nullptr;
+    const ObjectRenderFailure resolved = resolve_render_object(
+        edit_handle_,
+        expected_revision,
+        object_index,
+        handle);
+    if (resolved == ObjectRenderFailure::stale) {
+        result.error_code = "STALE_PROJECT_STATE";
+        result.error_message =
+            "The AviUtl2 project changed after the snapshot was captured.";
+        return result;
+    }
+    if (resolved == ObjectRenderFailure::not_found) {
+        result.error_code = "OBJECT_NOT_FOUND";
+        result.error_message = "The snapshot object does not exist.";
+        return result;
+    }
+    if (resolved != ObjectRenderFailure::none) {
+        result.error_code = "READ_SECTION_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 read section is unavailable.";
+        result.retryable = true;
+        return result;
+    }
+
+    RenderContext* const context = new (std::nothrow) RenderContext();
+    if (context == nullptr) {
+        result.error_code = "RENDER_ALLOCATION_FAILED";
+        result.error_message =
+            "The render context could not be allocated.";
+        result.retryable = true;
+        return result;
+    }
+    context->result.frame = frame;
+    if (!edit_handle_->rendering_object_video(
+            handle,
+            frame,
+            apply_effect ? TRUE : FALSE,
+            context,
+            rendering_video_callback)) {
+        release_render_context(context);
+        release_render_context(context);
+        result.error_code = "OBJECT_RENDER_REJECTED";
+        result.error_message =
+            "AviUtl2 rejected the object rendering request.";
+        result.retryable = true;
+        return result;
+    }
+
+    RenderedFrameResult outcome;
+    {
+        std::unique_lock lock(context->mutex);
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::seconds(kRenderTimeoutSeconds);
+        while (!context->done &&
+               !stopping_.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline) {
+            context->completed.wait_for(
+                lock,
+                std::chrono::milliseconds(100));
+        }
+        if (stopping_.load(std::memory_order_acquire) &&
+            !context->done) {
+            outcome.error_code = "BRIDGE_STOPPING";
+            outcome.error_message =
+                "The bridge stopped during object rendering.";
+            outcome.retryable = true;
+        } else if (!context->done) {
+            outcome.error_code = "OBJECT_RENDER_TIMEOUT";
+            outcome.error_message =
+                "AviUtl2 did not complete the object render in time.";
+            outcome.retryable = true;
+        } else {
+            outcome = std::move(context->result);
+        }
+    }
+    release_render_context(context);
+    return outcome;
+}
+
+RenderedAudioResult HostSdkAdapter::render_object_audio(
+    const std::int64_t expected_revision,
+    const std::size_t object_index,
+    const int frame_start,
+    const int frame_end,
+    const bool apply_effect) noexcept {
+    RenderedAudioResult result;
+    result.frame_start = frame_start;
+    result.frame_end = frame_end;
+    if (stopping_.load(std::memory_order_acquire)) {
+        result.error_code = "BRIDGE_STOPPING";
+        result.error_message =
+            "The bridge stopped before object audio rendering.";
+        result.retryable = true;
+        return result;
+    }
+    if (edit_handle_ == nullptr ||
+        host_version() < kHostVersionMoveEffect ||
+        edit_handle_->rendering_object_audio == nullptr) {
+        result.error_code = "OBJECT_RENDERING_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 object rendering API requires host 2.1.3 or newer.";
+        result.retryable = true;
+        return result;
+    }
+    if (get_edit_state() == EditState::save) {
+        result.error_code = "HOST_EXPORTING";
+        result.error_message = "AviUtl2 is currently exporting.";
+        result.retryable = true;
+        return result;
+    }
+    OBJECT_HANDLE handle = nullptr;
+    const ObjectRenderFailure resolved = resolve_render_object(
+        edit_handle_,
+        expected_revision,
+        object_index,
+        handle);
+    if (resolved == ObjectRenderFailure::stale) {
+        result.error_code = "STALE_PROJECT_STATE";
+        result.error_message =
+            "The AviUtl2 project changed after the snapshot was captured.";
+        return result;
+    }
+    if (resolved == ObjectRenderFailure::not_found) {
+        result.error_code = "OBJECT_NOT_FOUND";
+        result.error_message = "The snapshot object does not exist.";
+        return result;
+    }
+    if (resolved != ObjectRenderFailure::none) {
+        result.error_code = "READ_SECTION_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 read section is unavailable.";
+        result.retryable = true;
+        return result;
+    }
+
+    AudioRenderContext* const context =
+        new (std::nothrow) AudioRenderContext();
+    if (context == nullptr) {
+        result.error_code = "RENDER_ALLOCATION_FAILED";
+        result.error_message =
+            "The render context could not be allocated.";
+        result.retryable = true;
+        return result;
+    }
+    if (!edit_handle_->rendering_object_audio(
+            handle,
+            frame_start,
+            apply_effect ? TRUE : FALSE,
+            context,
+            rendering_audio_callback)) {
+        release_audio_render_context(context);
+        release_audio_render_context(context);
+        result.error_code = "OBJECT_RENDER_REJECTED";
+        result.error_message =
+            "AviUtl2 rejected the object audio rendering request.";
+        result.retryable = true;
+        return result;
+    }
+
+    RenderedAudioResult outcome;
+    {
+        std::unique_lock lock(context->mutex);
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::seconds(kRenderTimeoutSeconds);
+        while (!context->done &&
+               !stopping_.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline) {
+            context->completed.wait_for(
+                lock,
+                std::chrono::milliseconds(100));
+        }
+        if (stopping_.load(std::memory_order_acquire) &&
+            !context->done) {
+            outcome.error_code = "BRIDGE_STOPPING";
+            outcome.error_message =
+                "The bridge stopped during object audio rendering.";
+            outcome.retryable = true;
+        } else if (!context->done) {
+            outcome.error_code = "OBJECT_RENDER_TIMEOUT";
+            outcome.error_message =
+                "AviUtl2 did not complete the object audio render in time.";
+            outcome.retryable = true;
+        } else if (!context->error_code.empty()) {
+            outcome.error_code =
+                std::move(context->error_code);
+            outcome.error_message =
+                std::move(context->error_message);
+        } else {
+            outcome.interleaved_stereo =
+                std::move(context->interleaved_stereo);
+            outcome.ok = true;
+        }
+    }
+
+    release_audio_render_context(context);
+    return outcome;
+}
+
 
 FrameMarksResult HostSdkAdapter::get_frame_marks() noexcept {
     if (edit_handle_ == nullptr ||

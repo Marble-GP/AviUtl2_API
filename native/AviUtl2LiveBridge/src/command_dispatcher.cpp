@@ -366,6 +366,7 @@ struct MediaPathParseResult final {
             return "group";
         case 19:
             return "separator";
+
         default:
             return "unknown";
     }
@@ -1216,6 +1217,13 @@ std::string CommandDispatcher::dispatch(const Request& request) {
         if (request.method == "audio.release") {
             return handle_audio_release(request);
         }
+        if (request.method == "object.render_frame") {
+            return handle_object_frame_render(request);
+        }
+        if (request.method == "object.render_audio") {
+            return handle_object_audio_render(request);
+        }
+
         if (request.method == "object.set_item") {
             return handle_set_items(request, true);
         }
@@ -1304,6 +1312,9 @@ Json CommandDispatcher::capabilities_result() const {
         Json("audio.render"),
         Json("audio.read_chunk"),
         Json("audio.release"),
+        Json("object.render_frame"),
+        Json("object.render_audio"),
+
         Json("object.set_item"),
         Json("object.set_items"),
         Json("object.set_name"),
@@ -3540,6 +3551,391 @@ std::string CommandDispatcher::handle_frame_release(
         request.id,
         Json(Json::Object{{"released", Json(true)}}));
 }
+
+std::string CommandDispatcher::handle_object_frame_render(
+    const Request& request) {
+    const TargetParseResult target =
+        parse_object_target(request.params);
+    if (!target.ok) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            target.message);
+    }
+    const Json* frame_value =
+        find_field(request.params, "frame");
+    if (frame_value == nullptr ||
+        !frame_value->is_integer() ||
+        frame_value->as_integer() < 0 ||
+        frame_value->as_integer() >
+            std::numeric_limits<int>::max()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "frame must be a non-negative supported integer.");
+    }
+    const int frame =
+        static_cast<int>(frame_value->as_integer());
+    bool apply_effect = true;
+    if (const Json* value =
+            find_field(request.params, "apply_effect");
+        value != nullptr) {
+        if (!value->is_bool()) {
+            return make_error_response(
+                request.id,
+                "INVALID_ARGUMENT",
+                "apply_effect must be a boolean.");
+        }
+        apply_effect = value->as_bool();
+    }
+
+    SnapshotResult before = sdk_.get_snapshot();
+    if (!before.ok) {
+        return make_error_response(
+            request.id,
+            before.error_code,
+            before.error_message,
+            {},
+            before.retryable);
+    }
+    RenderedFrameResult rendered = sdk_.render_object_frame(
+        target.target.revision,
+        target.target.index,
+        frame,
+        apply_effect);
+    if (!rendered.ok) {
+        return make_error_response(
+            request.id,
+            rendered.error_code,
+            rendered.error_message,
+            {},
+            rendered.retryable);
+    }
+    if (rendered.frame != frame) {
+        return make_error_response(
+            request.id,
+            "RENDER_FRAME_MISMATCH",
+            "AviUtl2 returned a different frame than requested.");
+    }
+    SnapshotResult after = sdk_.get_snapshot();
+    if (!after.ok) {
+        return make_error_response(
+            request.id,
+            after.error_code,
+            after.error_message,
+            {},
+            after.retryable);
+    }
+    if (after.revision != before.revision ||
+        after.scene_id != before.scene_id) {
+        return make_error_response(
+            request.id,
+            "STALE_PROJECT_STATE",
+            "The project changed while the object was being rendered.",
+            Json::Object{
+                {"before_revision", Json(before.revision)},
+                {"current_revision", Json(after.revision)},
+            },
+            true);
+    }
+
+    std::vector<std::uint8_t> png;
+    std::string encoding_error;
+    if (!encode_png_rgba(
+            rendered.width,
+            rendered.height,
+            rendered.rgba,
+            png,
+            encoding_error)) {
+        return make_error_response(
+            request.id,
+            "PNG_ENCODING_FAILED",
+            encoding_error);
+    }
+    if (png.empty() || png.size() > kMaxFramePngBytes) {
+        return make_error_response(
+            request.id,
+            "RENDER_CAPTURE_TOO_LARGE",
+            "The encoded PNG exceeds the capture size limit.");
+    }
+
+    cleanup_captures();
+    if (captures_.size() >= kMaxCaptures ||
+        png.size() > kMaxCaptureBytes - capture_bytes_) {
+        return make_error_response(
+            request.id,
+            "CAPTURE_LIMIT_REACHED",
+            "Release an existing frame capture before rendering another.",
+            Json::Object{
+                {"active_captures",
+                 Json(static_cast<std::int64_t>(
+                     captures_.size()))},
+                {"active_bytes",
+                 Json(static_cast<std::int64_t>(
+                     capture_bytes_))},
+            },
+            true);
+    }
+
+    std::string digest;
+    try {
+        digest = sha256_hex(png);
+    } catch (const std::exception&) {
+        return make_error_response(
+            request.id,
+            "CAPTURE_HASH_FAILED",
+            "The rendered PNG could not be hashed.");
+    }
+    const std::string capture_id =
+        "cap-" + std::to_string(pid_) + "-" +
+        std::to_string(next_capture_id_++);
+    const std::size_t byte_size = png.size();
+    const std::size_t chunk_count =
+        (byte_size + kFrameChunkBytes - 1U) /
+        kFrameChunkBytes;
+    FrameCapture capture{
+        frame,
+        rendered.width,
+        rendered.height,
+        before.scene_id,
+        before.revision,
+        digest,
+        std::move(png),
+        std::chrono::steady_clock::now() +
+            std::chrono::seconds(kCaptureTtlSeconds),
+    };
+    capture_bytes_ += capture.png.size();
+    captures_.emplace(capture_id, std::move(capture));
+
+    return make_success_response(
+        request.id,
+        Json(Json::Object{
+            {"apply_effect", Json(apply_effect)},
+            {"byte_size",
+             Json(static_cast<std::int64_t>(byte_size))},
+            {"capture_id", Json(capture_id)},
+            {"chunk_bytes",
+             Json(static_cast<std::int64_t>(
+                 kFrameChunkBytes))},
+            {"chunk_count",
+             Json(static_cast<std::int64_t>(
+                 chunk_count))},
+            {"format", Json("png")},
+            {"frame", Json(frame)},
+            {"height", Json(rendered.height)},
+            {"native_renderer", Json(true)},
+            {"object_index",
+             Json(static_cast<std::int64_t>(
+                 target.target.index))},
+            {"revision", Json(before.revision)},
+            {"scene_id", Json(before.scene_id)},
+            {"sha256", Json(std::move(digest))},
+            {"ttl_seconds", Json(kCaptureTtlSeconds)},
+            {"width", Json(rendered.width)},
+        }));
+}
+
+std::string CommandDispatcher::handle_object_audio_render(
+    const Request& request) {
+    const TargetParseResult target =
+        parse_object_target(request.params);
+    if (!target.ok) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            target.message);
+    }
+    const Json* start_value =
+        find_field(request.params, "frame_start");
+    const Json* end_value =
+        find_field(request.params, "frame_end");
+    if (start_value == nullptr ||
+        !start_value->is_integer() ||
+        start_value->as_integer() < 0 ||
+        start_value->as_integer() >
+            std::numeric_limits<int>::max() ||
+        end_value == nullptr ||
+        !end_value->is_integer() ||
+        end_value->as_integer() < 0 ||
+        end_value->as_integer() >
+            std::numeric_limits<int>::max() ||
+        end_value->as_integer() < start_value->as_integer()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "frame_start and frame_end must be valid non-negative "
+            "integers with frame_end >= frame_start.");
+    }
+    const int frame_start =
+        static_cast<int>(start_value->as_integer());
+    const int frame_end =
+        static_cast<int>(end_value->as_integer());
+    bool apply_effect = true;
+    if (const Json* value =
+            find_field(request.params, "apply_effect");
+        value != nullptr) {
+        if (!value->is_bool()) {
+            return make_error_response(
+                request.id,
+                "INVALID_ARGUMENT",
+                "apply_effect must be a boolean.");
+        }
+        apply_effect = value->as_bool();
+    }
+
+    SnapshotResult before = sdk_.get_snapshot();
+    if (!before.ok) {
+        return make_error_response(
+            request.id,
+            before.error_code,
+            before.error_message,
+            {},
+            before.retryable);
+    }
+    RenderedAudioResult rendered = sdk_.render_object_audio(
+        target.target.revision,
+        target.target.index,
+        frame_start,
+        frame_end,
+        apply_effect);
+    if (!rendered.ok) {
+        return make_error_response(
+            request.id,
+            rendered.error_code,
+            rendered.error_message,
+            {},
+            rendered.retryable);
+    }
+    SnapshotResult after = sdk_.get_snapshot();
+    if (!after.ok) {
+        return make_error_response(
+            request.id,
+            after.error_code,
+            after.error_message,
+            {},
+            after.retryable);
+    }
+    if (after.revision != before.revision ||
+        after.scene_id != before.scene_id) {
+        return make_error_response(
+            request.id,
+            "STALE_PROJECT_STATE",
+            "The project changed while the object audio was being rendered.",
+            Json::Object{
+                {"before_revision", Json(before.revision)},
+                {"current_revision", Json(after.revision)},
+            },
+            true);
+    }
+    if (rendered.frame_start != frame_start ||
+        rendered.frame_end != frame_end) {
+        return make_error_response(
+            request.id,
+            "AUDIO_RENDER_METADATA_MISMATCH",
+            "AviUtl2 returned inconsistent audio render metadata.");
+    }
+    if (rendered.interleaved_stereo.empty() ||
+        rendered.interleaved_stereo.size() * sizeof(float) >
+            kMaxAudioCaptureBytes) {
+        return make_error_response(
+            request.id,
+            "AUDIO_RENDER_EMPTY",
+            "The rendered PCM is empty or exceeds the capture limit.");
+    }
+
+    cleanup_audio_captures();
+    const std::size_t pcm_bytes =
+        rendered.interleaved_stereo.size() * sizeof(float);
+    if (audio_captures_.size() >= kMaxCaptures ||
+        pcm_bytes > kMaxCaptureBytes - audio_capture_bytes_) {
+        return make_error_response(
+            request.id,
+            "CAPTURE_LIMIT_REACHED",
+            "Release an existing audio capture before rendering another.",
+            Json::Object{
+                {"active_captures",
+                 Json(static_cast<std::int64_t>(
+                     audio_captures_.size()))},
+                {"active_bytes",
+                 Json(static_cast<std::int64_t>(
+                     audio_capture_bytes_))},
+            },
+            true);
+    }
+
+    std::string digest;
+    try {
+        const std::span<const std::uint8_t> pcm_view(
+            reinterpret_cast<const std::uint8_t*>(
+                rendered.interleaved_stereo.data()),
+            rendered.interleaved_stereo.size() * sizeof(float));
+        digest = sha256_hex(pcm_view);
+    } catch (const std::exception&) {
+        return make_error_response(
+            request.id,
+            "CAPTURE_HASH_FAILED",
+            "The rendered PCM could not be hashed.");
+    }
+    const std::string capture_id =
+        "acap-" + std::to_string(pid_) + "-" +
+        std::to_string(next_capture_id_++);
+    const std::size_t chunk_count =
+        (pcm_bytes + kFrameChunkBytes - 1U) /
+        kFrameChunkBytes;
+    std::vector<std::uint8_t> pcm_bytes_data;
+    pcm_bytes_data.resize(
+        rendered.interleaved_stereo.size() * sizeof(float));
+    if (!rendered.interleaved_stereo.empty()) {
+        std::memcpy(
+            pcm_bytes_data.data(),
+            rendered.interleaved_stereo.data(),
+            pcm_bytes_data.size());
+    }
+    AudioCapture capture{
+        rendered.frame_start,
+        rendered.frame_end,
+        rendered.sample_rate,
+        before.scene_id,
+        before.revision,
+        digest,
+        std::move(pcm_bytes_data),
+        std::chrono::steady_clock::now() +
+            std::chrono::seconds(kCaptureTtlSeconds),
+    };
+    audio_capture_bytes_ += capture.pcm.size();
+
+    audio_captures_.emplace(capture_id, std::move(capture));
+
+    return make_success_response(
+        request.id,
+        Json(Json::Object{
+            {"apply_effect", Json(apply_effect)},
+            {"byte_size", Json(static_cast<std::int64_t>(pcm_bytes))},
+            {"capture_id", Json(capture_id)},
+            {"chunk_bytes",
+             Json(static_cast<std::int64_t>(
+                 kFrameChunkBytes))},
+            {"chunk_count",
+             Json(static_cast<std::int64_t>(chunk_count))},
+            {"sample_count",
+             Json(static_cast<std::int64_t>(
+                 pcm_bytes / (2U * sizeof(float))))},
+            {"channels", Json(2)},
+            {"format", Json("f32le")},
+            {"frame_end", Json(rendered.frame_end)},
+            {"frame_start", Json(rendered.frame_start)},
+            {"native_renderer", Json(true)},
+            {"object_index",
+             Json(static_cast<std::int64_t>(
+                 target.target.index))},
+            {"revision", Json(before.revision)},
+            {"sample_rate", Json(rendered.sample_rate)},
+            {"scene_id", Json(before.scene_id)},
+            {"sha256", Json(std::move(digest))},
+            {"ttl_seconds", Json(kCaptureTtlSeconds)},
+        }));
+}
+
 
 void CommandDispatcher::cleanup_audio_captures() {
     const auto now = std::chrono::steady_clock::now();

@@ -490,6 +490,30 @@ each PNG is limited to 32 MiB. Python `render_frame()` always releases in a
 `finally` block and validates chunk offsets, sizes, PNG signature, total size,
 and SHA-256 before optionally writing the file.
 
+### `object.render_frame` and `object.render_audio`
+
+Render one object through AviUtl2's `rendering_object_video()` /
+`rendering_object_audio()` APIs instead of the whole scene. Both methods
+take the standard object target plus `apply_effect` (default true; set
+false for the raw pre-effect picture or sound). `object.render_frame`
+accepts a non-negative `frame`; `object.render_audio` accepts
+`frame_start` and `frame_end` with `frame_end >= frame_start`.
+
+Responses reuse the scene-render capture flow: `capture_id`, byte/chunk
+metadata, `object_index`, `scene_id`, `revision`, `native_renderer: true`,
+SHA-256, and `ttl_seconds`. PNG bytes come from `frame.read_chunk` /
+`frame.release`; stereo float PCM comes from `audio.read_chunk` /
+`audio.release` (`format: "f32le"`, `channels: 2`, `sample_count`). The
+dispatcher snapshots before and after rendering and discards the capture
+with `STALE_PROJECT_STATE` when the project changes mid-render. Error
+codes include `OBJECT_RENDERING_UNAVAILABLE` (host below 2.1.3 or the
+render entry point is missing), `HOST_EXPORTING`, and
+`RENDER_FRAME_MISMATCH`.
+
+Python `render_object_frame()` / `render_object_audio()` validate all
+metadata, chunks, PNG signature, PCM layout, and SHA-256, and always
+release the capture in a `finally` block.
+
 ### `object.set_item` and `object.set_items`
 
 Every edit identifies its target with both fields:
