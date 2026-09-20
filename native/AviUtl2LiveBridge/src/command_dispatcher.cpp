@@ -360,6 +360,12 @@ struct MediaPathParseResult final {
             return "data";
         case 16:
             return "folder";
+        case 17:
+            return "number_group";
+        case 18:
+            return "group";
+        case 19:
+            return "separator";
         default:
             return "unknown";
     }

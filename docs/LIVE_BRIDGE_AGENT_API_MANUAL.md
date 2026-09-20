@@ -875,6 +875,9 @@ effect item type:
 | 14 | `figure` | `str` |
 | 15 | `data` | raw値 |
 | 16 | `folder` | `str` |
+| 17 | `number_group` | raw値 |
+| 18 | `group` | 設定値なし |
+| 19 | `separator` | 設定値なし |
 
 schemaが十分でない複雑型は`set_item()`のraw APIを使い、実機inspection後の既知値
 だけを設定する。
