@@ -1038,6 +1038,14 @@ std::string CommandDispatcher::dispatch(const Request& request) {
         if (request.method == "scene.update_current") {
             return handle_scene(request, true);
         }
+        if (request.method == "mark.list") {
+            return handle_marks(request, false);
+        }
+        if (request.method == "mark.set" ||
+            request.method == "mark.clear" ||
+            request.method == "mark.move") {
+            return handle_marks(request, true);
+        }
         if (request.method == "scene.list" ||
             request.method == "scene.create" ||
             request.method == "scene.duplicate" ||
@@ -1306,6 +1314,10 @@ Json CommandDispatcher::capabilities_result() const {
         Json("object.delete"),
         Json("batch.validate"),
         Json("batch.apply"),
+        Json("mark.list"),
+        Json("mark.set"),
+        Json("mark.clear"),
+        Json("mark.move"),
     };
     Json::Object result{
         {"explicit_plan_sync", Json(true)},
@@ -1367,6 +1379,25 @@ Json CommandDispatcher::capabilities_result() const {
              {"switch", Json(false)},
              {"update_non_undoable_confirmation",
               Json(true)},
+         })},
+        {"marks",
+         Json(Json::Object{
+             {"clear",
+              Json(host_version() >= kHostVersionSectionEndpoints)},
+             {"host_gated", Json(true)},
+             {"list",
+              Json(host_version() >= kHostVersionSectionEndpoints)},
+             {"max_marks",
+              Json(static_cast<std::int64_t>(kMaxFrameMarks))},
+             {"memo_max_bytes",
+              Json(static_cast<std::int64_t>(kMaxMarkMemoBytes))},
+             {"memo_max_characters",
+              Json(static_cast<std::int64_t>(kMaxMarkMemoCharacters))},
+             {"move",
+              Json(host_version() >= kHostVersionSectionEndpoints)},
+             {"non_undoable", Json(true)},
+             {"set",
+              Json(host_version() >= kHostVersionSectionEndpoints)},
          })},
         {"history",
          Json(Json::Object{
@@ -2112,6 +2143,169 @@ std::string CommandDispatcher::handle_scene(
             {"scene_id", Json(info.scene_id)},
             {"width", Json(info.width)},
         }));
+}
+
+std::string CommandDispatcher::handle_marks(
+    const Request& request,
+    const bool edit) {
+    if (!edit) {
+        FrameMarksResult marks = sdk_.get_frame_marks();
+        if (!marks.ok) {
+            return make_error_response(
+                request.id,
+                marks.error_code,
+                marks.error_message,
+                {},
+                marks.retryable);
+        }
+        Json::Array entries;
+        entries.reserve(marks.marks.size());
+        for (const FrameMark& mark : marks.marks) {
+            entries.push_back(
+                Json(Json::Object{
+                    {"frame", Json(mark.frame)},
+                    {"memo", Json(mark.memo)},
+                }));
+        }
+        return make_success_response(
+            request.id,
+            Json(Json::Object{
+                {"count",
+                 Json(static_cast<std::int64_t>(marks.marks.size()))},
+                {"marks", Json(std::move(entries))},
+                {"revision", Json(marks.revision)},
+            }));
+    }
+    const Json* expected =
+        find_field(request.params, "expected_revision");
+    const Json* confirmation =
+        find_field(request.params, "confirm_non_undoable");
+    if (expected == nullptr || !expected->is_integer() ||
+        expected->as_integer() <= 0 ||
+        confirmation == nullptr ||
+        !confirmation->is_bool() ||
+        !confirmation->as_bool()) {
+        return make_error_response(
+            request.id,
+            "NON_UNDOABLE_CONFIRMATION_REQUIRED",
+            "Mark edits require expected_revision and confirm_non_undoable=true.");
+    }
+    const std::int64_t expected_revision =
+        expected->as_integer();
+    const Json* frame_value =
+        find_field(request.params, "frame");
+    if (frame_value == nullptr ||
+        !frame_value->is_integer() ||
+        frame_value->as_integer() < 0 ||
+        frame_value->as_integer() >
+            std::numeric_limits<int>::max()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "frame must be a non-negative supported integer.");
+    }
+    const int frame =
+        static_cast<int>(frame_value->as_integer());
+    std::optional<std::wstring> memo;
+    if (const Json* memo_value =
+            find_field(request.params, "memo");
+        memo_value != nullptr && !memo_value->is_null()) {
+        if (!memo_value->is_string()) {
+            return make_error_response(
+                request.id,
+                "INVALID_ARGUMENT",
+                "memo must be a string or null.");
+        }
+        const std::string& raw = memo_value->as_string();
+        if (raw.size() > kMaxMarkMemoBytes ||
+            raw.find('\0') != std::string::npos) {
+            return make_error_response(
+                request.id,
+                "INVALID_ARGUMENT",
+                "memo must be NUL-free UTF-8 within the size limit.");
+        }
+        if (raw.find('\n') != std::string::npos ||
+            raw.find('\r') != std::string::npos) {
+            return make_error_response(
+                request.id,
+                "INVALID_ARGUMENT",
+                "memo must not contain newline characters.");
+        }
+        std::wstring wide;
+        try {
+            wide = utf8_to_wide(raw);
+        } catch (const std::exception&) {
+            return make_error_response(
+                request.id,
+                "INVALID_ARGUMENT",
+                "memo must be valid UTF-8 text.");
+        }
+        if (wide.size() > kMaxMarkMemoCharacters) {
+            return make_error_response(
+                request.id,
+                "INVALID_ARGUMENT",
+                "memo exceeds the character limit.");
+        }
+        memo = std::move(wide);
+    }
+    MarkEditResult result;
+    if (request.method == "mark.set") {
+        if (!memo.has_value()) {
+            memo.emplace();
+        }
+        result = sdk_.set_frame_mark(
+            expected_revision,
+            frame,
+            *memo);
+    } else if (request.method == "mark.clear") {
+        result = sdk_.clear_frame_mark(
+            expected_revision,
+            frame);
+    } else {
+        const Json* to_value =
+            find_field(request.params, "frame_to");
+        if (to_value == nullptr ||
+            !to_value->is_integer() ||
+            to_value->as_integer() < 0 ||
+            to_value->as_integer() >
+                std::numeric_limits<int>::max()) {
+            return make_error_response(
+                request.id,
+                "INVALID_ARGUMENT",
+                "frame_to must be a non-negative supported integer.");
+        }
+        const int frame_to =
+            static_cast<int>(to_value->as_integer());
+        result = sdk_.move_frame_mark(
+            expected_revision,
+            frame,
+            frame_to);
+    }
+    if (!result.ok) {
+        Json::Object details;
+        if (result.current_revision > 0) {
+            details.emplace(
+                "current_revision",
+                Json(result.current_revision));
+        }
+        return make_error_response(
+            request.id,
+            result.error_code,
+            result.error_message,
+            std::move(details),
+            result.retryable);
+    }
+    Json::Object payload{
+        {"frame", Json(result.frame)},
+        {"non_undoable", Json(true)},
+        {"revision", Json(result.current_revision)},
+    };
+    if (request.method == "mark.set") {
+        payload.emplace("memo", Json(result.memo));
+    }
+    return make_success_response(
+        request.id,
+        Json(std::move(payload)));
 }
 
 std::string CommandDispatcher::handle_snapshot(

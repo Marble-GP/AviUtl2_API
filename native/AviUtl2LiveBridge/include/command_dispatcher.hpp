@@ -158,6 +158,9 @@ private:
         const Request& request);
     [[nodiscard]] std::string handle_audio_release(
         const Request& request);
+    [[nodiscard]] std::string handle_marks(
+        const Request& request,
+        bool edit);
     [[nodiscard]] std::string run_batch(
         const Request& request,
         std::vector<CreateAliasCommand> commands,

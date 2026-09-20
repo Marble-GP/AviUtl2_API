@@ -261,6 +261,32 @@ struct StructuralEditResult final {
     std::string backend;
 };
 
+struct FrameMark final {
+    int frame = 0;
+    std::string memo;
+};
+
+struct FrameMarksResult final {
+    bool ok = false;
+    std::int64_t revision = 0;
+    std::vector<FrameMark> marks;
+    std::string error_code;
+    std::string error_message;
+    bool retryable = false;
+};
+
+struct MarkEditResult final {
+    bool ok = false;
+    std::int64_t current_revision = -1;
+    int frame = -1;
+    bool has_memo = false;
+    std::string memo;
+    bool non_undoable = true;
+    std::string error_code;
+    std::string error_message;
+    bool retryable = false;
+};
+
 enum class TimelineCommandType {
     move,
     remove,
@@ -583,6 +609,18 @@ public:
     [[nodiscard]] virtual RenderedAudioResult render_audio(
         int frame_start,
         int frame_end) noexcept = 0;
+    [[nodiscard]] virtual FrameMarksResult get_frame_marks() noexcept = 0;
+    [[nodiscard]] virtual MarkEditResult set_frame_mark(
+        std::int64_t expected_revision,
+        int frame,
+        const std::wstring& memo) noexcept = 0;
+    [[nodiscard]] virtual MarkEditResult clear_frame_mark(
+        std::int64_t expected_revision,
+        int frame) noexcept = 0;
+    [[nodiscard]] virtual MarkEditResult move_frame_mark(
+        std::int64_t expected_revision,
+        int frame,
+        int frame_to) noexcept = 0;
 };
 
 class HostSdkAdapter final : public SdkAdapter {
@@ -712,6 +750,18 @@ public:
     [[nodiscard]] RenderedAudioResult render_audio(
         int frame_start,
         int frame_end) noexcept override;
+    [[nodiscard]] FrameMarksResult get_frame_marks() noexcept override;
+    [[nodiscard]] MarkEditResult set_frame_mark(
+        std::int64_t expected_revision,
+        int frame,
+        const std::wstring& memo) noexcept override;
+    [[nodiscard]] MarkEditResult clear_frame_mark(
+        std::int64_t expected_revision,
+        int frame) noexcept override;
+    [[nodiscard]] MarkEditResult move_frame_mark(
+        std::int64_t expected_revision,
+        int frame,
+        int frame_to) noexcept override;
 
 private:
     EDIT_HANDLE* edit_handle_;

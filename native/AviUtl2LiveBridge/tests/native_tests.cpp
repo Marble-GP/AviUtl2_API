@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -38,6 +39,9 @@ using aviutl2::live::EditPlanEffectScope;
 using aviutl2::live::EditPlanResult;
 using aviutl2::live::EffectCatalogResult;
 using aviutl2::live::EffectInitialItem;
+using aviutl2::live::FrameMark;
+using aviutl2::live::FrameMarksResult;
+using aviutl2::live::MarkEditResult;
 using aviutl2::live::Json;
 using aviutl2::live::LayerInfo;
 using aviutl2::live::LayerSnapshotResult;
@@ -452,6 +456,50 @@ public:
         return result;
     }
 
+    [[nodiscard]] FrameMarksResult get_frame_marks() noexcept override {
+        return frame_marks_result;
+    }
+
+    [[nodiscard]] MarkEditResult set_frame_mark(
+        const std::int64_t expected_revision,
+        const int frame,
+        const std::wstring& memo) noexcept override {
+        ++mark_edit_calls;
+        MarkEditResult result = mark_edit_result;
+        result.current_revision = expected_revision;
+        result.frame = frame;
+        if (result.ok && result.has_memo) {
+            result.memo.clear();
+            result.memo.reserve(memo.size());
+            for (const wchar_t character : memo) {
+                result.memo.push_back(static_cast<char>(character));
+            }
+        }
+        return result;
+    }
+
+    [[nodiscard]] MarkEditResult clear_frame_mark(
+        const std::int64_t expected_revision,
+        const int frame) noexcept override {
+        ++mark_edit_calls;
+        MarkEditResult result = mark_edit_result;
+        result.current_revision = expected_revision;
+        result.frame = frame;
+        return result;
+    }
+
+    [[nodiscard]] MarkEditResult move_frame_mark(
+        const std::int64_t expected_revision,
+        const int frame,
+        const int frame_to) noexcept override {
+        static_cast<void>(frame);
+        ++mark_edit_calls;
+        MarkEditResult result = mark_edit_result;
+        result.current_revision = expected_revision;
+        result.frame = frame_to;
+        return result;
+    }
+
     EditState state = EditState::edit;
     ProjectInfoResult project{
         true,
@@ -634,6 +682,9 @@ public:
     std::vector<ObjectItemUpdate> last_updates;
     std::vector<EditPlanCommand> last_plan_commands;
     std::int64_t last_revision = 0;
+    FrameMarksResult frame_marks_result;
+    MarkEditResult mark_edit_result;
+    int mark_edit_calls = 0;
     std::size_t last_object_index = 0U;
     std::size_t last_page_start = 0U;
     std::size_t last_page_count = 0U;
@@ -1902,6 +1953,313 @@ void test_protocol_and_fixtures() {
         "placement collision should include a structured range");
 }
 
+// Frame-mark host fixture.  The mark callbacks model AviUtl2's
+// frame mark storage so that set/clear/move can be verified through
+// the adapter read-back path.
+EDIT_INFO host_marks_edit_info{};
+EDIT_SECTION host_marks_edit_section{};
+std::map<int, std::wstring> host_marks;
+int host_mark_set_calls = 0;
+int host_mark_clear_calls = 0;
+int host_mark_move_calls = 0;
+int host_mark_edited_calls = 0;
+bool host_mark_set_fail = false;
+bool host_mark_move_fail = false;
+
+void get_host_marks_edit_info(EDIT_INFO* info, const int info_size) {
+    require(
+        info_size == static_cast<int>(sizeof(EDIT_INFO)),
+        "marks host adapter should request complete edit information");
+    *info = host_marks_edit_info;
+}
+
+[[nodiscard]] int get_host_marks_edit_state() {
+    return EDIT_HANDLE::EDIT_STATE_EDIT;
+}
+
+[[nodiscard]] bool call_host_marks_section(
+    void* parameter,
+    void (*callback)(void*, EDIT_SECTION*)) {
+    callback(parameter, &host_marks_edit_section);
+    return true;
+}
+
+[[nodiscard]] int host_get_mark_frame_list(
+    int* frame_list,
+    const int frame_num) {
+    const int count = static_cast<int>(host_marks.size());
+    if (frame_list == nullptr) {
+        return count;
+    }
+    if (frame_num < count) {
+        return -1;
+    }
+    int index = 0;
+    for (const auto& entry : host_marks) {
+        frame_list[index++] = entry.first;
+    }
+    return count;
+}
+
+[[nodiscard]] LPCWSTR host_get_mark_frame_memo(const int frame) {
+    const auto found = host_marks.find(frame);
+    return found == host_marks.end() ? nullptr : found->second.c_str();
+}
+
+void host_set_mark_frame(const int frame, LPCWSTR memo) {
+    ++host_mark_set_calls;
+    if (host_mark_set_fail) {
+        return;
+    }
+    if (memo == nullptr || *memo == L'\0') {
+        host_marks.erase(frame);
+        return;
+    }
+    host_marks[frame] = memo;
+}
+
+void host_clear_mark_frame(const int frame) {
+    ++host_mark_clear_calls;
+    host_marks.erase(frame);
+}
+
+[[nodiscard]] bool host_move_mark_frame(
+    const int frame,
+    const int frame_to) {
+    ++host_mark_move_calls;
+    if (host_mark_move_fail) {
+        return false;
+    }
+    const auto found = host_marks.find(frame);
+    if (found == host_marks.end() || host_marks.count(frame_to) != 0U) {
+        return false;
+    }
+    host_marks[frame_to] = std::move(found->second);
+    host_marks.erase(found);
+    return true;
+}
+
+void host_set_marks_edited_state() {
+    ++host_mark_edited_calls;
+}
+
+void test_host_frame_marks() {
+    host_marks_edit_info = {};
+    host_marks_edit_info.width = 1920;
+    host_marks_edit_info.height = 1080;
+    host_marks_edit_info.rate = 30;
+    host_marks_edit_info.scale = 1;
+    host_marks_edit_info.sample_rate = 44100;
+    host_marks_edit_info.frame_max = 199;
+    host_marks_edit_info.layer_max = 2;
+    host_marks_edit_info.scene_id = 3;
+
+    host_marks_edit_section = {};
+    host_marks_edit_section.find_object = find_host_object;
+    host_marks_edit_section.get_object_layer_frame =
+        get_host_object_range;
+    host_marks_edit_section.get_object_alias = get_host_object_alias;
+    host_marks_edit_section.get_mark_frame_list =
+        host_get_mark_frame_list;
+    host_marks_edit_section.get_mark_frame_memo =
+        host_get_mark_frame_memo;
+    host_marks_edit_section.set_mark_frame = host_set_mark_frame;
+    host_marks_edit_section.clear_mark_frame = host_clear_mark_frame;
+    host_marks_edit_section.move_mark_frame = host_move_mark_frame;
+    host_marks_edit_section.set_edited_state =
+        host_set_marks_edited_state;
+
+    EDIT_HANDLE edit_handle{};
+    edit_handle.get_edit_info = get_host_marks_edit_info;
+    edit_handle.get_edit_state = get_host_marks_edit_state;
+    edit_handle.call_read_section_param = call_host_marks_section;
+    edit_handle.call_edit_section_param = call_host_marks_section;
+
+    HostSdkAdapter adapter(&edit_handle);
+
+    aviutl2::live::store_host_version(
+        aviutl2::live::kHostVersionSectionEndpoints);
+    {
+        host_marks.clear();
+        host_mark_set_calls = 0;
+        host_mark_clear_calls = 0;
+        host_mark_move_calls = 0;
+        host_mark_edited_calls = 0;
+        host_mark_set_fail = false;
+        host_mark_move_fail = false;
+
+        const SnapshotResult snapshot = adapter.get_snapshot();
+        require(
+            snapshot.ok,
+            "the marks host fixture should capture a snapshot");
+
+        const FrameMarksResult empty = adapter.get_frame_marks();
+        require(
+            empty.ok && empty.marks.empty(),
+            "the marks fixture should start without marks");
+
+        const MarkEditResult set_mark = adapter.set_frame_mark(
+            snapshot.revision, 10, L"note");
+        require(
+            set_mark.ok && set_mark.frame == 10 &&
+                set_mark.memo == "note",
+            "mark.set should persist the frame mark");
+        require(
+            host_mark_edited_calls == 1,
+            "mark.set should flag the host edit state");
+
+        const FrameMarksResult listed = adapter.get_frame_marks();
+        require(
+            listed.ok && listed.marks.size() == 1U &&
+                listed.marks[0].frame == 10 &&
+                listed.marks[0].memo == "note",
+            "mark.list should round trip the frame mark");
+
+        const MarkEditResult stale = adapter.set_frame_mark(
+            snapshot.revision + 1, 20, L"note2");
+        require(
+            !stale.ok &&
+                stale.error_code == "STALE_PROJECT_STATE" &&
+                host_mark_set_calls == 1,
+            "mark.set should reject a stale revision before editing");
+
+        const MarkEditResult missing = adapter.clear_frame_mark(
+            snapshot.revision, 99);
+        require(
+            !missing.ok &&
+                missing.error_code == "MARK_NOT_FOUND",
+            "mark.clear should report an unmarked frame");
+
+        const MarkEditResult second = adapter.set_frame_mark(
+            snapshot.revision, 20, L"note2");
+        require(
+            second.ok && second.frame == 20 &&
+                second.memo == "note2" && host_marks.size() == 2U,
+            "a second mark.set should succeed");
+
+        const MarkEditResult moved = adapter.move_frame_mark(
+            snapshot.revision, 10, 30);
+        require(
+            moved.ok && moved.frame == 30 &&
+                host_marks.count(10) == 0U &&
+                host_marks.count(30) == 1U,
+            "mark.move should relocate the frame mark");
+        require(
+            host_mark_edited_calls == 3,
+            "mark.move should flag the host edit state");
+
+        const MarkEditResult occupied = adapter.move_frame_mark(
+            snapshot.revision, 30, 20);
+        require(
+            !occupied.ok &&
+                occupied.error_code == "MARK_MOVE_REJECTED",
+            "mark.move should reject an occupied destination");
+
+        const MarkEditResult cleared = adapter.clear_frame_mark(
+            snapshot.revision, 20);
+        require(
+            cleared.ok && host_marks.size() == 1U,
+            "mark.clear should remove the frame mark");
+
+        const MarkEditResult repeated = adapter.clear_frame_mark(
+            snapshot.revision, 20);
+        require(
+            !repeated.ok &&
+                repeated.error_code == "MARK_NOT_FOUND",
+            "mark.clear should report a missing mark");
+
+        host_mark_set_fail = true;
+        const MarkEditResult failed_set = adapter.set_frame_mark(
+            snapshot.revision, 30, L"note3");
+        require(
+            !failed_set.ok &&
+                failed_set.error_code == "MARK_SET_FAILED",
+            "mark.set should fail closed when the host ignores the write");
+        require(
+            host_marks.size() == 1U &&
+                host_marks.begin()->first == 30,
+            "a failed mark.set should preserve the previous state");
+    }
+
+    aviutl2::live::store_host_version(
+        aviutl2::live::kHostVersionMoveEffect);
+    {
+        const FrameMarksResult unavailable =
+            adapter.get_frame_marks();
+        require(
+            !unavailable.ok &&
+                unavailable.error_code == "MARKS_UNAVAILABLE",
+            "frame marks should be unavailable on older hosts");
+    }
+    aviutl2::live::store_host_version(
+        aviutl2::live::kHostVersionSectionEndpoints);
+}
+
+void test_host_mark_dispatch() {
+    FakeSdkAdapter sdk;
+    CommandDispatcher dispatcher(sdk, 4242U);
+
+    sdk.frame_marks_result.ok = true;
+    sdk.frame_marks_result.revision = 123;
+    sdk.frame_marks_result.marks.push_back({10, "note"});
+
+    const Json marks_json = aviutl2::live::parse_json(
+        dispatcher.handle_payload(
+            R"({"id":"marks","protocol_version":1,"method":"mark.list","params":{}})"));
+    require(
+        marks_json.find("result")->find("count")->as_integer() == 1 &&
+            marks_json.find("result")
+                    ->find("marks")
+                    ->as_array()[0]
+                    .find("frame")
+                    ->as_integer() == 10 &&
+            marks_json.find("result")
+                    ->find("marks")
+                    ->as_array()[0]
+                    .find("memo")
+                    ->as_string() == "note" &&
+            marks_json.find("result")->find("revision")->as_integer() == 123,
+        "mark.list should expose frame marks from the adapter");
+
+    sdk.mark_edit_result.ok = true;
+    sdk.mark_edit_result.has_memo = true;
+    sdk.mark_edit_result.memo = "note2";
+    const Json mark_set_json = aviutl2::live::parse_json(
+        dispatcher.handle_payload(
+            R"({"id":"mark-set","protocol_version":1,"method":"mark.set","params":{"expected_revision":123,"frame":15,"memo":"note2","confirm_non_undoable":true}})"));
+    require(
+        mark_set_json.find("result")->find("frame")->as_integer() == 15 &&
+            mark_set_json.find("result")
+                    ->find("non_undoable")
+                    ->is_bool() &&
+            mark_set_json.find("result")->find("memo")->as_string() == "note2",
+        "mark.set should return the resulting mark");
+    require(
+        sdk.mark_edit_calls == 1,
+        "mark.set should reach the adapter");
+
+    const Json gate_json = aviutl2::live::parse_json(
+        dispatcher.handle_payload(
+            R"({"id":"mark-gate","protocol_version":1,"method":"mark.set","params":{"expected_revision":123,"frame":15,"memo":"note2"}})"));
+    require(
+        gate_json.find("error")->find("code")->as_string() ==
+            "NON_UNDOABLE_CONFIRMATION_REQUIRED",
+        "mark.set should require the non-undoable confirmation");
+
+    sdk.mark_edit_result.ok = false;
+    sdk.mark_edit_result.has_memo = false;
+    sdk.mark_edit_result.error_code = "MARK_NOT_FOUND";
+    sdk.mark_edit_result.error_message =
+        "The requested frame does not carry a mark.";
+    const Json missing_json = aviutl2::live::parse_json(
+        dispatcher.handle_payload(
+            R"({"id":"mark-missing","protocol_version":1,"method":"mark.clear","params":{"expected_revision":123,"frame":20,"confirm_non_undoable":true}})"));
+    require(
+        missing_json.find("error")->find("code")->as_string() ==
+            "MARK_NOT_FOUND",
+        "mark.clear should forward adapter errors");
+}
+
 void test_sessions_events_and_audio() {
     FakeSdkAdapter sdk;
     CommandDispatcher dispatcher(sdk, 5151U);
@@ -2370,6 +2728,8 @@ int main(const int argument_count, char** arguments) {
         test_host_snapshot_with_multi_layer_object();
         test_host_native_effect_reorder();
         test_host_native_media_trim();
+        test_host_frame_marks();
+        test_host_mark_dispatch();
         test_protocol_and_fixtures();
         test_host_version_gates();
         test_sessions_events_and_audio();

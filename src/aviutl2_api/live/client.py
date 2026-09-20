@@ -40,6 +40,7 @@ from .frame import (
 )
 from .inspection import ItemInspection, ObjectInspection
 from .layers import LayerPage
+from .marks import FrameMarkList, MarkEditResult
 from .media import (
     CreatedMediaObject,
     MediaInventory,
@@ -73,6 +74,9 @@ _MUTATION_METHODS = frozenset(
         "layer.update",
         "media.relink",
         "media.trim",
+        "mark.clear",
+        "mark.move",
+        "mark.set",
         "object.create_from_alias",
         "object.create_from_media_file",
         "object.delete",
@@ -355,6 +359,84 @@ class LiveClient:
         return SceneInfo.from_wire(
             self.call("scene.update_current", params, timeout=timeout)
         )
+
+    def list_frame_marks(
+        self,
+        *,
+        timeout: float | None = None,
+    ) -> FrameMarkList:
+        """List every frame mark in the currently open project."""
+        return FrameMarkList.from_wire(self.call("mark.list", {}, timeout=timeout))
+
+    def set_frame_mark(
+        self,
+        frame: int,
+        memo: str,
+        *,
+        expected_revision: int,
+        confirm_non_undoable: bool = False,
+        timeout: float | None = None,
+    ) -> MarkEditResult:
+        """Set the memo of a frame mark, creating the mark if needed."""
+        if not confirm_non_undoable:
+            raise ValueError("confirm_non_undoable=True is required")
+        result = self.call(
+            "mark.set",
+            {
+                "expected_revision": expected_revision,
+                "frame": frame,
+                "memo": memo,
+                "confirm_non_undoable": True,
+            },
+            timeout=timeout,
+        )
+        return MarkEditResult.from_wire(result)
+
+    def clear_frame_mark(
+        self,
+        frame: int,
+        *,
+        expected_revision: int,
+        confirm_non_undoable: bool = False,
+        timeout: float | None = None,
+    ) -> MarkEditResult:
+        """Remove the mark from a frame."""
+        if not confirm_non_undoable:
+            raise ValueError("confirm_non_undoable=True is required")
+        result = self.call(
+            "mark.clear",
+            {
+                "expected_revision": expected_revision,
+                "frame": frame,
+                "confirm_non_undoable": True,
+            },
+            timeout=timeout,
+        )
+        return MarkEditResult.from_wire(result)
+
+    def move_frame_mark(
+        self,
+        frame: int,
+        frame_to: int,
+        *,
+        expected_revision: int,
+        confirm_non_undoable: bool = False,
+        timeout: float | None = None,
+    ) -> MarkEditResult:
+        """Move a frame mark and its memo to another frame."""
+        if not confirm_non_undoable:
+            raise ValueError("confirm_non_undoable=True is required")
+        result = self.call(
+            "mark.move",
+            {
+                "expected_revision": expected_revision,
+                "frame": frame,
+                "frame_to": frame_to,
+                "confirm_non_undoable": True,
+            },
+            timeout=timeout,
+        )
+        return MarkEditResult.from_wire(result)
 
     def history_undo(
         self,

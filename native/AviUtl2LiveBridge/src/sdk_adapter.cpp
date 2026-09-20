@@ -5292,6 +5292,454 @@ void palette_details_callback(
     return result;
 }
 
+enum class MarkOp {
+    set,
+    clear,
+    move,
+};
+
+struct MarkEditContext final {
+    EDIT_HANDLE* edit_handle = nullptr;
+    std::int64_t expected_revision = 0;
+    MarkOp op = MarkOp::set;
+    int frame = 0;
+    int frame_to = 0;
+    const std::wstring* memo = nullptr;
+    MarkEditResult result;
+};
+
+struct MarkCaptureContext final {
+    EDIT_HANDLE* edit_handle = nullptr;
+    FrameMarksResult result;
+};
+
+[[nodiscard]] bool frame_mark_members_available(
+    const EDIT_SECTION* edit) noexcept {
+    return edit != nullptr &&
+        edit->get_mark_frame_list != nullptr &&
+        edit->get_mark_frame_memo != nullptr &&
+        edit->set_mark_frame != nullptr &&
+        edit->clear_mark_frame != nullptr &&
+        edit->move_mark_frame != nullptr;
+}
+
+// Reads every marked frame and its memo.  Memo pointers returned by
+// the SDK stay valid only until the next mark edit or the end of the
+// callback, so every memo is copied immediately.  Frames are sorted
+// ascending and duplicate frames fail closed.
+void collect_frame_marks(
+    EDIT_SECTION* edit,
+    FrameMarksResult& result) {
+    if (edit == nullptr ||
+        edit->get_mark_frame_list == nullptr ||
+        edit->get_mark_frame_memo == nullptr) {
+        result.error_code = "MARKS_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 frame mark API is unavailable.";
+        return;
+    }
+    if (host_version() < kHostVersionSectionEndpoints) {
+        result.error_code = "MARKS_UNAVAILABLE";
+        result.error_message =
+            "Frame marks require AviUtl2 2.1.4 or newer.";
+        return;
+    }
+    const int count =
+        edit->get_mark_frame_list(nullptr, 0);
+    if (count < 0) {
+        result.error_code = "HOST_INSPECTION_FAILED";
+        result.error_message =
+            "AviUtl2 could not read the mark count.";
+        return;
+    }
+    if (static_cast<std::size_t>(count) > kMaxFrameMarks) {
+        result.error_code = "MARKS_TOO_LARGE";
+        result.error_message =
+            "The number of frame marks exceeds the limit.";
+        return;
+    }
+    if (count == 0) {
+        result.ok = true;
+        return;
+    }
+    std::vector<int> frames(
+        static_cast<std::size_t>(count),
+        0);
+    if (edit->get_mark_frame_list(
+            frames.data(),
+            count) != count) {
+        result.error_code = "HOST_INSPECTION_FAILED";
+        result.error_message =
+            "AviUtl2 could not return the mark list.";
+        return;
+    }
+    std::sort(frames.begin(), frames.end());
+    if (std::adjacent_find(frames.begin(), frames.end()) !=
+        frames.end()) {
+        result.error_code = "HOST_INSPECTION_FAILED";
+        result.error_message =
+            "AviUtl2 returned a duplicated mark frame.";
+        return;
+    }
+    result.marks.reserve(frames.size());
+    for (const int frame : frames) {
+        FrameMark mark;
+        mark.frame = frame;
+        if (const LPCWSTR memo =
+                edit->get_mark_frame_memo(frame);
+            memo != nullptr) {
+            const std::size_t length = wcsnlen_s(
+                memo,
+                kMaxMarkMemoCharacters + 1U);
+            if (length > kMaxMarkMemoCharacters) {
+                result.error_code =
+                    "HOST_INSPECTION_FAILED";
+                result.error_message =
+                    "A frame mark memo exceeds the limit.";
+                return;
+            }
+            if (length > 0U) {
+                mark.memo = wide_to_utf8(
+                    std::wstring_view(memo, length));
+            }
+        }
+        result.marks.push_back(std::move(mark));
+    }
+    result.ok = true;
+}
+
+void mark_list_callback(
+    void* parameter,
+    EDIT_SECTION* edit) noexcept {
+    auto& context =
+        *static_cast<MarkCaptureContext*>(parameter);
+    try {
+        CapturedTimeline timeline;
+        if (!capture_timeline(
+                context.edit_handle,
+                edit,
+                timeline,
+                context.result.error_code,
+                context.result.error_message)) {
+            return;
+        }
+        context.result.revision = timeline.revision;
+        collect_frame_marks(edit, context.result);
+    } catch (const std::exception& error) {
+        context.result.error_code =
+            "MARKS_INSPECTION_FAILED";
+        context.result.error_message = error.what();
+    } catch (...) {
+        context.result.error_code =
+            "MARKS_INSPECTION_FAILED";
+        context.result.error_message =
+            "The frame mark callback failed.";
+    }
+}
+
+[[nodiscard]] MarkEditResult unavailable_mark_result(
+    const std::string_view code,
+    const std::string_view message,
+    const bool retryable) {
+    MarkEditResult result;
+    result.error_code = std::string(code);
+    result.error_message = std::string(message);
+    result.retryable = retryable;
+    return result;
+}
+
+// Confirms that the frame carries a mark whose memo equals the
+// expected text.  A null SDK memo is treated as an empty memo.
+[[nodiscard]] bool verify_mark_memo(
+    EDIT_SECTION* edit,
+    const int frame,
+    const std::wstring& memo) {
+    FrameMarksResult verify;
+    collect_frame_marks(edit, verify);
+    if (!verify.ok) {
+        return false;
+    }
+    for (const FrameMark& mark : verify.marks) {
+        if (mark.frame == frame) {
+            return mark.memo == wide_to_utf8(memo);
+        }
+    }
+    return false;
+}
+
+// Confirms that the frame no longer carries a mark.
+[[nodiscard]] bool verify_mark_absent(
+    EDIT_SECTION* edit,
+    const int frame) {
+    FrameMarksResult verify;
+    collect_frame_marks(edit, verify);
+    if (!verify.ok) {
+        return false;
+    }
+    for (const FrameMark& mark : verify.marks) {
+        if (mark.frame == frame) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Applies a mark set/clear/move inside the edit section with
+// revision verification, read-back verification, best-effort
+// rollback, and an explicit set_edited_state call.  Frame marks are
+// not Undo targets, so callers must confirm non_undoable before
+// reaching the adapter.
+void mark_edit_callback(
+    void* parameter,
+    EDIT_SECTION* edit) noexcept {
+    auto& context =
+        *static_cast<MarkEditContext*>(parameter);
+    try {
+        CapturedTimeline timeline;
+        if (!capture_timeline(
+                context.edit_handle,
+                edit,
+                timeline,
+                context.result.error_code,
+                context.result.error_message)) {
+            return;
+        }
+        context.result.current_revision = timeline.revision;
+        if (timeline.revision != context.expected_revision) {
+            context.result.error_code = "STALE_PROJECT_STATE";
+            context.result.error_message =
+                "The AviUtl2 project changed after the snapshot was captured.";
+            return;
+        }
+        if (!frame_mark_members_available(edit)) {
+            context.result.error_code = "MARKS_UNAVAILABLE";
+            context.result.error_message =
+                "The AviUtl2 frame mark API is unavailable.";
+            return;
+        }
+        if (host_version() < kHostVersionSectionEndpoints) {
+            context.result.error_code = "MARKS_UNAVAILABLE";
+            context.result.error_message =
+                "Frame marks require AviUtl2 2.1.4 or newer.";
+            return;
+        }
+
+        FrameMarksResult before;
+        collect_frame_marks(edit, before);
+        if (!before.ok) {
+            context.result.error_code =
+                before.error_code.empty()
+                    ? std::string("HOST_INSPECTION_FAILED")
+                    : before.error_code;
+            context.result.error_message =
+                before.error_message.empty()
+                    ? std::string(
+                          "AviUtl2 could not read the frame marks before the edit.")
+                    : before.error_message;
+            return;
+        }
+        const auto find_mark =
+            [&before](const int frame) -> const FrameMark* {
+                for (const FrameMark& mark : before.marks) {
+                    if (mark.frame == frame) {
+                        return &mark;
+                    }
+                }
+                return nullptr;
+            };
+        const auto rollback_set =
+            [&edit](const int frame,
+                    const std::wstring& memo) {
+                edit->set_mark_frame(
+                    frame,
+                    memo.c_str());
+            };
+        const auto rollback_clear =
+            [&edit](const int frame) {
+                edit->clear_mark_frame(frame);
+            };
+        const auto rollback_move =
+            [&edit](const int frame,
+                    const int frame_to) {
+                return edit->move_mark_frame(
+                    frame,
+                    frame_to);
+            };
+
+        if (context.op == MarkOp::set) {
+            if (context.memo == nullptr) {
+                context.result.error_code = "INVALID_ARGUMENT";
+                context.result.error_message =
+                    "A memo is required for mark.set.";
+                return;
+            }
+            if (context.frame < 0) {
+                context.result.error_code = "INVALID_ARGUMENT";
+                context.result.error_message =
+                    "frame must be a non-negative integer.";
+                return;
+            }
+            std::wstring restored;
+            if (const FrameMark* existing =
+                    find_mark(context.frame);
+                existing != nullptr) {
+                restored = utf8_to_wide(existing->memo);
+            }
+            edit->set_mark_frame(
+                context.frame,
+                context.memo->c_str());
+            if (!verify_mark_memo(
+                    edit,
+                    context.frame,
+                    *context.memo)) {
+                bool restored_ok = false;
+                if (!restored.empty() ||
+                    find_mark(context.frame) != nullptr) {
+                    rollback_set(
+                        context.frame,
+                        restored);
+                    restored_ok = verify_mark_memo(
+                        edit,
+                        context.frame,
+                        restored);
+                } else {
+                    rollback_clear(context.frame);
+                    restored_ok = verify_mark_absent(
+                        edit,
+                        context.frame);
+                }
+                context.result.error_code =
+                    restored_ok
+                        ? std::string("MARK_SET_FAILED")
+                        : std::string("MARK_ROLLBACK_FAILED");
+                context.result.error_message =
+                    restored_ok
+                        ? std::string(
+                              "AviUtl2 did not persist the frame mark; the previous state was restored.")
+                        : std::string(
+                              "AviUtl2 did not persist the frame mark and the rollback failed.");
+                return;
+            }
+            context.result.frame = context.frame;
+            context.result.has_memo = true;
+            context.result.memo =
+                wide_to_utf8(*context.memo);
+        } else if (context.op == MarkOp::clear) {
+            if (context.frame < 0) {
+                context.result.error_code = "INVALID_ARGUMENT";
+                context.result.error_message =
+                    "frame must be a non-negative integer.";
+                return;
+            }
+            const FrameMark* existing =
+                find_mark(context.frame);
+            if (existing == nullptr) {
+                context.result.error_code = "MARK_NOT_FOUND";
+                context.result.error_message =
+                    "The requested frame does not carry a mark.";
+                return;
+            }
+            const std::wstring restored =
+                utf8_to_wide(existing->memo);
+            edit->clear_mark_frame(context.frame);
+            if (!verify_mark_absent(edit, context.frame)) {
+                rollback_set(context.frame, restored);
+                const bool restored_ok = verify_mark_memo(
+                    edit,
+                    context.frame,
+                    restored);
+                context.result.error_code =
+                    restored_ok
+                        ? std::string("MARK_CLEAR_FAILED")
+                        : std::string("MARK_ROLLBACK_FAILED");
+                context.result.error_message =
+                    restored_ok
+                        ? std::string(
+                              "AviUtl2 did not clear the frame mark; the previous state was restored.")
+                        : std::string(
+                              "AviUtl2 did not clear the frame mark and the rollback failed.");
+                return;
+            }
+            context.result.frame = context.frame;
+        } else {
+            if (context.frame < 0 || context.frame_to < 0) {
+                context.result.error_code = "INVALID_ARGUMENT";
+                context.result.error_message =
+                    "frame and frame_to must be non-negative integers.";
+                return;
+            }
+            const FrameMark* source =
+                find_mark(context.frame);
+            if (source == nullptr) {
+                context.result.error_code = "MARK_NOT_FOUND";
+                context.result.error_message =
+                    "The requested frame does not carry a mark.";
+                return;
+            }
+            if (find_mark(context.frame_to) != nullptr) {
+                context.result.error_code =
+                    "MARK_MOVE_REJECTED";
+                context.result.error_message =
+                    "The destination frame already carries a mark.";
+                return;
+            }
+            const std::wstring source_memo =
+                utf8_to_wide(source->memo);
+            if (!edit->move_mark_frame(
+                    context.frame,
+                    context.frame_to)) {
+                context.result.error_code =
+                    "MARK_MOVE_REJECTED";
+                context.result.error_message =
+                    "AviUtl2 rejected the frame mark move.";
+                return;
+            }
+            const bool moved_ok =
+                verify_mark_absent(edit, context.frame) &&
+                verify_mark_memo(
+                    edit,
+                    context.frame_to,
+                    source_memo);
+            if (!moved_ok) {
+                bool restored_ok = false;
+                if (rollback_move(
+                        context.frame_to,
+                        context.frame)) {
+                    restored_ok =
+                        verify_mark_memo(
+                            edit,
+                            context.frame,
+                            source_memo);
+                }
+                context.result.error_code =
+                    restored_ok
+                        ? std::string("MARK_MOVE_REJECTED")
+                        : std::string("MARK_ROLLBACK_FAILED");
+                context.result.error_message =
+                    restored_ok
+                        ? std::string(
+                              "The frame mark move did not persist; the previous state was restored.")
+                        : std::string(
+                              "The frame mark move did not persist and the rollback failed.");
+                return;
+            }
+            context.result.frame = context.frame_to;
+        }
+
+        if (edit->set_edited_state != nullptr) {
+            edit->set_edited_state();
+        }
+        context.result.ok = true;
+    } catch (const std::exception& error) {
+        context.result.error_code = "MARK_EDIT_FAILED";
+        context.result.error_message = error.what();
+    } catch (...) {
+        context.result.error_code = "MARK_EDIT_FAILED";
+        context.result.error_message =
+            "The frame mark edit failed inside the SDK callback.";
+    }
+}
+
 }  // namespace
 
 HostSdkAdapter::HostSdkAdapter(EDIT_HANDLE* edit_handle) noexcept
@@ -7443,6 +7891,144 @@ RenderedAudioResult HostSdkAdapter::render_audio(
             "The audio range could not be rendered.";
     }
     return result;
+}
+
+FrameMarksResult HostSdkAdapter::get_frame_marks() noexcept {
+    if (edit_handle_ == nullptr ||
+        edit_handle_->call_read_section_param == nullptr) {
+        return FrameMarksResult{
+            false,
+            0,
+            {},
+            "MARKS_UNAVAILABLE",
+            "The AviUtl2 read section is unavailable.",
+            true,
+        };
+    }
+    MarkCaptureContext context{edit_handle_, {}};
+    if (!edit_handle_->call_read_section_param(
+            &context,
+            mark_list_callback)) {
+        return FrameMarksResult{
+            false,
+            0,
+            {},
+            "READ_SECTION_UNAVAILABLE",
+            "AviUtl2 could not open a read section.",
+            true,
+        };
+    }
+    return std::move(context.result);
+}
+
+MarkEditResult HostSdkAdapter::set_frame_mark(
+    const std::int64_t expected_revision,
+    const int frame,
+    const std::wstring& memo) noexcept {
+    if (edit_handle_ == nullptr ||
+        edit_handle_->call_edit_section_param == nullptr) {
+        return unavailable_mark_result(
+            "EDIT_SECTION_UNAVAILABLE",
+            "The AviUtl2 edit section is unavailable.",
+            true);
+    }
+    if (get_edit_state() == EditState::save) {
+        return unavailable_mark_result(
+            "HOST_EXPORTING",
+            "AviUtl2 is currently exporting.",
+            true);
+    }
+    MarkEditContext context{
+        edit_handle_,
+        expected_revision,
+        MarkOp::set,
+        frame,
+        -1,
+        &memo,
+        {},
+    };
+    if (!edit_handle_->call_edit_section_param(
+            &context,
+            mark_edit_callback)) {
+        return unavailable_mark_result(
+            "EDIT_SECTION_UNAVAILABLE",
+            "AviUtl2 could not open an edit section.",
+            true);
+    }
+    return std::move(context.result);
+}
+
+MarkEditResult HostSdkAdapter::clear_frame_mark(
+    const std::int64_t expected_revision,
+    const int frame) noexcept {
+    if (edit_handle_ == nullptr ||
+        edit_handle_->call_edit_section_param == nullptr) {
+        return unavailable_mark_result(
+            "EDIT_SECTION_UNAVAILABLE",
+            "The AviUtl2 edit section is unavailable.",
+            true);
+    }
+    if (get_edit_state() == EditState::save) {
+        return unavailable_mark_result(
+            "HOST_EXPORTING",
+            "AviUtl2 is currently exporting.",
+            true);
+    }
+    MarkEditContext context{
+        edit_handle_,
+        expected_revision,
+        MarkOp::clear,
+        frame,
+        -1,
+        nullptr,
+        {},
+    };
+    if (!edit_handle_->call_edit_section_param(
+            &context,
+            mark_edit_callback)) {
+        return unavailable_mark_result(
+            "EDIT_SECTION_UNAVAILABLE",
+            "AviUtl2 could not open an edit section.",
+            true);
+    }
+    return std::move(context.result);
+}
+
+MarkEditResult HostSdkAdapter::move_frame_mark(
+    const std::int64_t expected_revision,
+    const int frame,
+    const int frame_to) noexcept {
+    if (edit_handle_ == nullptr ||
+        edit_handle_->call_edit_section_param == nullptr) {
+        return unavailable_mark_result(
+            "EDIT_SECTION_UNAVAILABLE",
+            "The AviUtl2 edit section is unavailable.",
+            true);
+    }
+    if (get_edit_state() == EditState::save) {
+        return unavailable_mark_result(
+            "HOST_EXPORTING",
+            "AviUtl2 is currently exporting.",
+            true);
+    }
+    MarkEditContext context{
+        edit_handle_,
+        expected_revision,
+        MarkOp::move,
+        frame,
+        frame_to,
+        nullptr,
+        {},
+    };
+    if (!edit_handle_->call_edit_section_param(
+            &context,
+            mark_edit_callback)) {
+        return unavailable_mark_result(
+            "EDIT_SECTION_UNAVAILABLE",
+            "AviUtl2 could not open an edit section.",
+            true);
+    }
+    return std::move(context.result);
 }
 
 std::string edit_state_name(const EditState state) {

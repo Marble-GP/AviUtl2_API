@@ -420,6 +420,155 @@ def test_layers_returns_typed_revision_page() -> None:
     assert request["method"] == "project.get_layers"
 
 
+def test_list_frame_marks_returns_typed_list() -> None:
+    result = {
+        "count": 2,
+        "marks": [
+            {"frame": 10, "memo": "chapter one"},
+            {"frame": 45, "memo": ""},
+        ],
+        "revision": 55,
+    }
+    response = json.dumps(
+        {"id": "py-00000001", "ok": True, "result": result},
+        ensure_ascii=False,
+    ).encode()
+    stream = ScriptedStream(encode_frame(response), write_chunk=4096)
+    client = LiveClient(FramedTransport(stream))
+
+    marks = client.list_frame_marks()
+
+    assert marks.revision == 55
+    assert marks.marks[0].frame == 10
+    assert marks.marks[0].memo == "chapter one"
+    assert marks.marks[1].memo == ""
+    payload_size = struct.unpack("<I", stream.written[:4])[0]
+    request = json.loads(stream.written[4 : 4 + payload_size])
+    assert request["method"] == "mark.list"
+
+
+def test_list_frame_marks_rejects_count_mismatch() -> None:
+    result = {
+        "count": 2,
+        "marks": [{"frame": 10, "memo": ""}],
+        "revision": 55,
+    }
+    response = json.dumps(
+        {"id": "py-00000001", "ok": True, "result": result},
+    ).encode()
+    stream = ScriptedStream(encode_frame(response), write_chunk=4096)
+    client = LiveClient(FramedTransport(stream))
+
+    with pytest.raises(ProtocolError):
+        client.list_frame_marks()
+
+
+def test_set_frame_mark_requires_confirmation() -> None:
+    response = json.dumps(
+        {
+            "id": "py-00000001",
+            "ok": True,
+            "result": {"count": 0, "marks": [], "revision": 1},
+        },
+    ).encode()
+    stream = ScriptedStream(encode_frame(response), write_chunk=4096)
+    client = LiveClient(FramedTransport(stream))
+
+    with pytest.raises(ValueError, match="confirm_non_undoable"):
+        client.set_frame_mark(10, "note", expected_revision=5)
+
+
+def test_set_frame_mark_sends_confirmation_and_returns_result() -> None:
+    result = {
+        "frame": 10,
+        "memo": "note",
+        "non_undoable": True,
+        "revision": 6,
+    }
+    response = json.dumps(
+        {"id": "py-00000001", "ok": True, "result": result},
+    ).encode()
+    stream = ScriptedStream(encode_frame(response), write_chunk=4096)
+    client = LiveClient(FramedTransport(stream))
+
+    edited = client.set_frame_mark(
+        10,
+        "note",
+        expected_revision=5,
+        confirm_non_undoable=True,
+    )
+
+    assert edited.frame == 10
+    assert edited.memo == "note"
+    assert edited.non_undoable is True
+    assert edited.revision == 6
+    payload_size = struct.unpack("<I", stream.written[:4])[0]
+    request = json.loads(stream.written[4 : 4 + payload_size])
+    assert request["method"] == "mark.set"
+    assert request["params"] == {
+        "expected_revision": 5,
+        "frame": 10,
+        "memo": "note",
+        "confirm_non_undoable": True,
+    }
+
+
+def test_move_frame_mark_sends_confirmation_and_returns_result() -> None:
+    result = {
+        "frame": 30,
+        "non_undoable": True,
+        "revision": 7,
+    }
+    response = json.dumps(
+        {"id": "py-00000001", "ok": True, "result": result},
+    ).encode()
+    stream = ScriptedStream(encode_frame(response), write_chunk=4096)
+    client = LiveClient(FramedTransport(stream))
+
+    edited = client.move_frame_mark(
+        10,
+        30,
+        expected_revision=6,
+        confirm_non_undoable=True,
+    )
+
+    assert edited.frame == 30
+    assert edited.memo is None
+    payload_size = struct.unpack("<I", stream.written[:4])[0]
+    request = json.loads(stream.written[4 : 4 + payload_size])
+    assert request["method"] == "mark.move"
+    assert request["params"] == {
+        "expected_revision": 6,
+        "frame": 10,
+        "frame_to": 30,
+        "confirm_non_undoable": True,
+    }
+
+
+def test_clear_frame_mark_sends_confirmation_and_returns_result() -> None:
+    result = {
+        "frame": 10,
+        "non_undoable": True,
+        "revision": 8,
+    }
+    response = json.dumps(
+        {"id": "py-00000001", "ok": True, "result": result},
+    ).encode()
+    stream = ScriptedStream(encode_frame(response), write_chunk=4096)
+    client = LiveClient(FramedTransport(stream))
+
+    edited = client.clear_frame_mark(
+        10,
+        expected_revision=7,
+        confirm_non_undoable=True,
+    )
+
+    assert edited.frame == 10
+    payload_size = struct.unpack("<I", stream.written[:4])[0]
+    request = json.loads(stream.written[4 : 4 + payload_size])
+    assert request["method"] == "mark.clear"
+
+
 def test_snapshot_exposes_api_lock_state() -> None:
     result = {
         "revision": 321,

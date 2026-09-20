@@ -527,6 +527,25 @@ The duration and effects are preserved. Occupied destinations return
 
 Deletes the revision-scoped existing object in one SDK edit section.
 
+### `mark.list`, `mark.set`, `mark.clear`, and `mark.move`
+
+Frame marks (timeline markers stored by AviUtl2 itself) are exposed through
+four methods. `mark.list` reads every marked frame with its memo inside one
+SDK read section and returns `{count, marks:[{frame, memo}], revision}` with
+frames sorted ascending. `mark.set` writes or updates the memo of one frame,
+`mark.clear` removes a mark, and `mark.move` relocates a mark and its memo to
+an unmarked destination frame.
+
+Marks are not Undo targets in AviUtl2, so the editing methods require both
+`expected_revision` and `confirm_non_undoable: true`; the plugin performs each
+edit inside one revision-scoped SDK edit section, verifies the result by
+reading the marks back, and attempts a best-effort restore when the host does
+not persist the change. Every successful edit also flags the host edit state.
+Memos are single-line UTF-8 text up to 4096 bytes (1024 characters after
+conversion). Error codes include `MARK_NOT_FOUND`, `MARK_SET_FAILED`,
+`MARK_CLEAR_FAILED`, `MARK_MOVE_REJECTED`, `MARKS_UNAVAILABLE` (host below
+2.1.4), and `MARK_ROLLBACK_FAILED` when the host also rejects restoration.
+
 ### `object.split_media`
 
 Splits a basic `動画ファイル` or `音声ファイル` object at a frame strictly inside

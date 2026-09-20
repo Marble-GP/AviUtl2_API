@@ -50,6 +50,7 @@ from .inspection import (
     TrackInspection,
 )
 from .layers import LayerInfo, LayerPage
+from .marks import FrameMark, FrameMarkList, MarkEditResult
 from .media import (
     CreatedMediaObject,
     MediaInventory,
@@ -111,6 +112,9 @@ __all__ = [
     "EventWatchResult",
     "EditingSession",
     "EditingTransactionResult",
+    "FrameMark",
+    "FrameMarkList",
+    "MarkEditResult",
     "ItemInspection",
     "LiveClient",
     "LiveObject",
