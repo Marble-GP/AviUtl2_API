@@ -8133,6 +8133,30 @@ RenderedAudioResult HostSdkAdapter::render_object_audio(
         result.retryable = true;
         return result;
     }
+    const std::int64_t frame_count =
+        static_cast<std::int64_t>(frame_end) -
+        static_cast<std::int64_t>(frame_start) + 1;
+    if (frame_start < 0 || frame_end < frame_start ||
+        frame_count > kMaxAudioRenderFrames) {
+        result.error_code = "INVALID_ARGUMENT";
+        result.error_message =
+            "The object audio frame range is invalid or exceeds the limit.";
+        return result;
+    }
+    const ProjectInfoResult project = get_project_info();
+    if (!project.ok || project.info.sample_rate <= 0) {
+        result.error_code =
+            project.error_code.empty()
+                ? "PROJECT_INFO_UNAVAILABLE"
+                : project.error_code;
+        result.error_message =
+            project.error_message.empty()
+                ? "The scene sample rate is unavailable."
+                : project.error_message;
+        result.retryable = project.retryable;
+        return result;
+    }
+    result.sample_rate = project.info.sample_rate;
     OBJECT_HANDLE handle = nullptr;
     const ObjectRenderFailure resolved = resolve_render_object(
         edit_handle_,
@@ -8158,68 +8182,113 @@ RenderedAudioResult HostSdkAdapter::render_object_audio(
         return result;
     }
 
-    AudioRenderContext* const context =
-        new (std::nothrow) AudioRenderContext();
-    if (context == nullptr) {
-        result.error_code = "RENDER_ALLOCATION_FAILED";
-        result.error_message =
-            "The render context could not be allocated.";
-        result.retryable = true;
-        return result;
-    }
-    if (!edit_handle_->rendering_object_audio(
-            handle,
-            frame_start,
-            apply_effect ? TRUE : FALSE,
-            context,
-            rendering_audio_callback)) {
-        release_audio_render_context(context);
-        release_audio_render_context(context);
-        result.error_code = "OBJECT_RENDER_REJECTED";
-        result.error_message =
-            "AviUtl2 rejected the object audio rendering request.";
-        result.retryable = true;
-        return result;
-    }
+    try {
+        for (int frame = frame_start;
+             frame <= frame_end;
+             ++frame) {
+            if (stopping_.load(std::memory_order_acquire)) {
+                result.interleaved_stereo.clear();
+                result.error_code = "BRIDGE_STOPPING";
+                result.error_message =
+                    "The bridge stopped during object audio rendering.";
+                result.retryable = true;
+                return result;
+            }
+            AudioRenderContext* const context =
+                new (std::nothrow) AudioRenderContext();
+            if (context == nullptr) {
+                result.error_code =
+                    "RENDER_ALLOCATION_FAILED";
+                result.error_message =
+                    "The render context could not be allocated.";
+                result.retryable = true;
+                return result;
+            }
+            context->requested_frame = frame;
+            if (!edit_handle_->rendering_object_audio(
+                    handle,
+                    frame,
+                    apply_effect ? TRUE : FALSE,
+                    context,
+                    rendering_audio_callback)) {
+                release_audio_render_context(context);
+                release_audio_render_context(context);
+                result.error_code = "OBJECT_RENDER_REJECTED";
+                result.error_message =
+                    "AviUtl2 rejected the object audio rendering request.";
+                result.retryable = true;
+                return result;
+            }
 
-    RenderedAudioResult outcome;
-    {
-        std::unique_lock lock(context->mutex);
-        const auto deadline =
-            std::chrono::steady_clock::now() +
-            std::chrono::seconds(kRenderTimeoutSeconds);
-        while (!context->done &&
-               !stopping_.load(std::memory_order_acquire) &&
-               std::chrono::steady_clock::now() < deadline) {
-            context->completed.wait_for(
-                lock,
-                std::chrono::milliseconds(100));
+            std::vector<float> frame_audio;
+            {
+                std::unique_lock lock(context->mutex);
+                const auto deadline =
+                    std::chrono::steady_clock::now() +
+                    std::chrono::seconds(kRenderTimeoutSeconds);
+                while (!context->done &&
+                       !stopping_.load(std::memory_order_acquire) &&
+                       std::chrono::steady_clock::now() < deadline) {
+                    context->completed.wait_for(
+                        lock,
+                        std::chrono::milliseconds(100));
+                }
+                if (stopping_.load(std::memory_order_acquire) &&
+                    !context->done) {
+                    result.error_code = "BRIDGE_STOPPING";
+                    result.error_message =
+                        "The bridge stopped during object audio rendering.";
+                    result.retryable = true;
+                } else if (!context->done) {
+                    result.error_code = "OBJECT_RENDER_TIMEOUT";
+                    result.error_message =
+                        "AviUtl2 did not complete the object audio render in time.";
+                    result.retryable = true;
+                } else if (!context->error_code.empty()) {
+                    result.error_code =
+                        std::move(context->error_code);
+                    result.error_message =
+                        std::move(context->error_message);
+                } else {
+                    frame_audio =
+                        std::move(context->interleaved_stereo);
+                }
+            }
+            release_audio_render_context(context);
+            if (!result.error_code.empty()) {
+                return result;
+            }
+            const std::size_t current_bytes =
+                result.interleaved_stereo.size() *
+                sizeof(float);
+            const std::size_t frame_bytes =
+                frame_audio.size() * sizeof(float);
+            if (frame_bytes > kMaxAudioCaptureBytes ||
+                current_bytes >
+                    kMaxAudioCaptureBytes - frame_bytes) {
+                result.interleaved_stereo.clear();
+                result.error_code = "AUDIO_CAPTURE_TOO_LARGE";
+                result.error_message =
+                    "The rendered audio range exceeds the capture limit.";
+                return result;
+            }
+            result.interleaved_stereo.insert(
+                result.interleaved_stereo.end(),
+                frame_audio.begin(),
+                frame_audio.end());
         }
-        if (stopping_.load(std::memory_order_acquire) &&
-            !context->done) {
-            outcome.error_code = "BRIDGE_STOPPING";
-            outcome.error_message =
-                "The bridge stopped during object audio rendering.";
-            outcome.retryable = true;
-        } else if (!context->done) {
-            outcome.error_code = "OBJECT_RENDER_TIMEOUT";
-            outcome.error_message =
-                "AviUtl2 did not complete the object audio render in time.";
-            outcome.retryable = true;
-        } else if (!context->error_code.empty()) {
-            outcome.error_code =
-                std::move(context->error_code);
-            outcome.error_message =
-                std::move(context->error_message);
-        } else {
-            outcome.interleaved_stereo =
-                std::move(context->interleaved_stereo);
-            outcome.ok = true;
-        }
+        result.ok = true;
+    } catch (const std::exception& error) {
+        result.interleaved_stereo.clear();
+        result.error_code = "AUDIO_RENDER_FAILED";
+        result.error_message = error.what();
+    } catch (...) {
+        result.interleaved_stereo.clear();
+        result.error_code = "AUDIO_RENDER_FAILED";
+        result.error_message =
+            "The object audio range could not be rendered.";
     }
-
-    release_audio_render_context(context);
-    return outcome;
+    return result;
 }
 
 
