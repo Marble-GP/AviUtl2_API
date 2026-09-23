@@ -1,5 +1,29 @@
 # Live Bridge protocol changelog
 
+
+## Protocol v1 - plugin/client 0.9.7
+
+- Adopted the 2026-09-05 official SDK mirror (`mirror-2026-09-05`). New SDK
+  members are appended-only struct members; the bridge stores the host version
+  reported by `InitializePlugin` and gates every new call on it.
+- Added native effect reorder: `object.effect.reorder` uses `move_effect` on
+  AviUtl2 2.1.3+ (`reorder_backend: "sdk_move_effect"`), keeping the verified
+  alias replacement fallback on older hosts.
+- Added native media trim: `media.trim` moves section endpoints directly on
+  2.1.4+ (`backend: "native"`, `trim_fixed_speed: "sdk_move_object_section"`),
+  with collision preflight, LIFO rollback, and read-back verification.
+- Added frame marks API on 2.1.4+: `mark.list`, `mark.set`, `mark.clear`,
+  `mark.move` with revision checks, occupancy validation, and explicit
+  non-undoable confirmation. Marks are not part of the timeline revision hash.
+- Added object-level rendering on 2.1.3+: `object.render_frame` (revision-bound
+  PNG capture) and `object.render_audio` (stereo f32le PCM with frame-loop
+  accumulation and SHA-256 integrity).
+- Added capability sections `host` (`required`, `version`, `sdk_frame_marks`,
+  `sdk_move_effect`, `sdk_object_rendering`, `sdk_section_endpoints`) and
+  `marks` (limits, gating, `non_undoable: true`).
+- Inspection now reports effect item types 17-19 as `number_group`, `group`,
+  and `separator`.
+
 ## Protocol v1 - plugin/client 0.9.6
 
 - Added nullable `project_file_path` to `project.get_info`. The value is copied

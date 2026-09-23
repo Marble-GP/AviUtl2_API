@@ -1,6 +1,42 @@
 # AviUtl2 Live Bridge エージェント向け完全APIマニュアル
 
-> Current target: Python package / plugin 0.9.6, additive protocol v1.
+> Current target: Python package / plugin 0.9.7, additive protocol v1.
+
+## 0.9.7: native editing, frame marks, and object rendering
+
+0.9.7 adopts the 2026-09-05 official SDK mirror (`mirror-2026-09-05`). The
+bridge stores the host version reported by `InitializePlugin` and gates every
+new SDK call on it. New SDK members are appended-only struct members, so a
+gated build never touches out-of-bounds members on an older host.
+
+| Host capability | Minimum AviUtl2 | Unlocked |
+|---|---|---|
+| `sdk_move_effect` | 2.1.3 (2010300) | native effect reorder, object-level rendering |
+| `sdk_section_endpoints` | 2.1.4 (2010400) | native media trim, frame marks |
+
+- Native effect reorder: `object.effect.reorder` uses `move_effect`; the
+  object identity stays stable and the response reports
+  `reorder_backend: "sdk_move_effect"`. The verified alias replacement remains
+  the fallback on older hosts.
+- Native media trim: `media.trim` moves section endpoints directly for
+  fixed-speed media. Collision preflight runs before the first mutation; a
+  failed verification rolls back in LIFO order. The response reports
+  `backend: "native"`.
+- Frame marks: `mark.list` / `mark.set` / `mark.clear` / `mark.move`. Marks
+  are explicitly non-undoable, so mutations require
+  `confirm_non_undoable: true`. Limits: 256 marks per project, memo up to
+  1024 characters (single line, no NUL/newline). Occupied destination frames
+  are rejected; stale revisions fail with `STALE_PROJECT_STATE` and roll
+  back. Marks do not participate in the timeline revision hash.
+- Object-level rendering: `render_object_frame(obj, frame=...)` returns a
+  revision-bound PNG capture; `render_object_audio(obj, frame_start=...,
+  frame_end=...)` accumulates per-frame SDK audio into stereo f32le PCM with
+  SHA-256 integrity validation.
+- Feature-detect at runtime: `system.get_capabilities` -> `host.sdk_frame_marks`,
+  `host.sdk_move_effect`, `host.sdk_object_rendering`,
+  `host.sdk_section_endpoints`. Do not branch on the plugin version string.
+
+The 0.9.6 layers below are unchanged and remain compatible.
 
 ## 0.9.6: safe local files and explicit synchronization
 
@@ -15,7 +51,7 @@
   `project_saving` are observations; the latter occurs before save and does not
   prove success.
 
-対象バージョン: plugin / Python client 0.9.6
+対象バージョン: plugin / Python client 0.9.7
 
 Wire protocol: v1 additive
 
@@ -1963,9 +1999,11 @@ pretend to command AviUtl2.
 
 - `docs/AGENT_API_CARD.md`: LLMへ渡す最小の英語中心API契約
 - `docs/LIVE_BRIDGE_AGENT_QUICK_START.md`: Agent向け最短workflow
+- `docs/releases/v0.9.7.md`: 0.9.7?????????????
 - `docs/releases/v0.9.6.md`: 0.9.6の更新・移行手順と既知制約
 - `docs/LIVE_BRIDGE_PROTOCOL.md`: Wire protocol設計と実装根拠
 - `docs/LIVE_BRIDGE_DEVELOPMENT.md`: native build、security回帰、manual integration
 - `docs/aup2_format_specification.md`: `.aup2` parser/serializer実装ノート
+- `protocol/CAPABILITIES_0.9.7.json`: ??capability manifest
 - `protocol/CAPABILITIES_0.9.6.json`: 静的capability manifest
 - `protocol/CHANGELOG.md`: protocol変更履歴

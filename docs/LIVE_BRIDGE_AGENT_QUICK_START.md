@@ -1,4 +1,4 @@
-# AviUtl2 API 0.9.6 エージェント・クイックスタート
+# AviUtl2 API 0.9.7 エージェント・クイックスタート
 
 AIエージェントが最初に読む日本語ガイドです。最小の英語コンテキストが必要なら
 [Agent API Card](AGENT_API_CARD.md)、全methodの詳細が必要なら

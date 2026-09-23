@@ -1,7 +1,30 @@
-# AviUtl2 API 0.9.6 — Agent API Card
+# AviUtl2 API 0.9.7 — Agent API Card
 
 This is the smallest recommended context for an LLM that writes editing code.
 Use the complete manual only when an operation is not covered here.
+
+## What 0.9.7 adds (host-gated)
+
+New SDK paths are gated on the running AviUtl2 version. Feature-detect via
+`system.get_capabilities` -> `host`: `sdk_move_effect` and
+`sdk_object_rendering` need AviUtl2 2.1.3+, `sdk_frame_marks` and
+`sdk_section_endpoints` need 2.1.4+. Older hosts keep the 0.9.6 alias
+fallbacks and fail closed with explicit errors.
+
+- Native `object.effect.reorder` (`reorder_backend: "sdk_move_effect"`): the
+  object identity stays stable, no alias replacement round-trip.
+- Native `media.trim` (`backend: "native"`): fixed-speed media, collision
+  preflight before any mutation, LIFO rollback, read-back verification.
+- `mark.list` / `mark.set` / `mark.clear` / `mark.move`: occupancy-checked and
+  revision-checked, explicitly non-undoable. Mutations require
+  `confirm_non_undoable: true`; memo is a single line up to 1024 characters;
+  at most 256 marks. Errors: `MARKS_UNAVAILABLE` (old host),
+  `MARK_SET_REJECTED`, `MARK_MOVE_REJECTED`, `MARK_NOT_FOUND`,
+  `STALE_PROJECT_STATE` (rolled back).
+- `render_object_frame(obj, frame=...)` returns a revision-bound PNG capture
+  of one object; `render_object_audio(obj, frame_start=..., frame_end=...)`
+  returns stereo f32le PCM with SHA-256 integrity validation.
+- Inspection item types 17-19: `number_group`, `group`, `separator`.
 
 ## Choose one backend
 

@@ -21,28 +21,33 @@ AviUtl ver.2 uses a text-based project format (.aup2) similar to INI files. This
 - **Live Bridge (experimental)**: Connect to the currently open AviUtl2 project over
   a local Windows named pipe
 
-## What's New in 0.9.6
+## What's New in 0.9.7
 
-0.9.6 adds a safe stateful API for local `.aup2` work and an explicit bridge
-between the same `EditPlan` and the project open in AviUtl2. Nothing watches or
-saves a project in the background.
+0.9.7 adopts the 2026-09-05 official SDK mirror and adds host-gated native
+editing and rendering. Every new SDK path requires a minimum AviUtl2 host
+version; older hosts keep the verified 0.9.6 alias fallbacks and fail closed
+with explicit errors instead of touching out-of-bounds SDK members.
 
-- `LocalProject.load()` retains unknown sections, keys, third-party Effects and
-  untouched property order while high-level edits patch only known sections.
-- `checkpoint()` creates `project.ai-0001.aup2` without changing the source
-  binding. `save_as()` and `save_source()` use explicit overwrite/hash guards.
-- `SyncSession.apply(plan)` validates a clean Local/Live pair, applies once to
-  AviUtl2, reads native Alias results back, and commits the local in-memory copy.
-  It never writes the `.aup2` file.
-- GUI or local changes are reported as `local_dirty`, `live_dirty`, `diverged`,
-  or `incompatible`; existing differences are not guessed or auto-merged.
-- The 0.9.5 `LiveProject`, semantic Effect profiles, native render, and raw
-  `LiveClient` escape hatch remain compatible.
+- **Native effect reorder** (`object.effect.reorder` via `move_effect`) on
+  AviUtl2 2.1.3+: the object identity stays stable, verified alias replacement
+  remains the fallback on older hosts.
+- **Native media trim** (`media.trim` via section endpoint moves) on 2.1.4+:
+  collision preflight, LIFO rollback, read-back verification; covers
+  multi-section media at fixed speed.
+- **Frame marks API** (`mark.list`/`mark.set`/`mark.clear`/`mark.move`) on
+  2.1.4+: revision-checked, occupancy-validated, explicitly non-undoable.
+- **Object-level rendering** (`render_object_frame` / `render_object_audio`)
+  on 2.1.3+: revision-bound PNG and stereo f32le PCM for a single object.
+- **Effect item types 17-19** (`number_group`, `group`, `separator`) are now
+  reported by inspection.
+- `LiveClient` exposes `host` capability flags (`sdk_frame_marks`,
+  `sdk_move_effect`, `sdk_object_rendering`, `sdk_section_endpoints`) so agents
+  can feature-detect at runtime.
 
 See the compact [Agent API Card](docs/AGENT_API_CARD.md), the
 [Agent Quick Start](docs/LIVE_BRIDGE_AGENT_QUICK_START.md), the
 [complete API manual](docs/LIVE_BRIDGE_AGENT_API_MANUAL.md), and the
-[v0.9.6 release notes](docs/releases/v0.9.6.md).
+[v0.9.7 release notes](docs/releases/v0.9.7.md).
 
 ## Safe Python Quick Start
 
@@ -153,7 +158,7 @@ serialize_to_file(project, "output.aup2")
 json_data = to_json(project)
 ```
 
-### Live Bridge (0.9.6 beta)
+### Live Bridge (0.9.7 beta)
 
 `LiveProject` is the standard entry point for short, revision-safe edits of the
 project currently open in AviUtl2:
@@ -474,7 +479,7 @@ still fail closed. Disabled standard Effects use AviUtl2's canonical
 The current official SDK cannot list/create/duplicate/switch scenes or execute
 Undo/Redo. Those capabilities are reported as false, calls fail with
 `SDK_METHOD_UNAVAILABLE`, and the 1.0 release gate remains closed. See
-[`protocol/CAPABILITIES_0.9.6.json`](protocol/CAPABILITIES_0.9.6.json).
+[`protocol/CAPABILITIES_0.9.7.json`](protocol/CAPABILITIES_0.9.7.json).
 
 Render an exact composite frame with the running AviUtl2 process:
 
@@ -681,8 +686,8 @@ to PyPI using a project-scoped API token and creates a GitHub Release containing
 `AviUtl2LiveBridge.aux2` and its SHA-256 checksum:
 
 ```bash
-git tag v0.9.6
-git push origin v0.9.6
+git tag v0.9.7
+git push origin v0.9.7
 ```
 
 The tag without its leading `v` must exactly match `project.version` in
@@ -709,6 +714,7 @@ Start here:
   Default `LiveProject`/`EditPlan` workflow for AI agents
 - [Live Bridge Agent API Manual](docs/LIVE_BRIDGE_AGENT_API_MANUAL.md) -
   Complete Python API, safety rules, errors, and advanced operations
+- [v0.9.7 Release Notes](docs/releases/v0.9.7.md) -
 - [v0.9.6 Release Notes](docs/releases/v0.9.6.md) -
   Upgrade steps, high-level API examples, compatibility, and known constraints
 

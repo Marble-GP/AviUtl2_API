@@ -22,7 +22,7 @@ namespace {
 
 COMMON_PLUGIN_TABLE g_plugin_table{
     L"AviUtl2 Live Bridge",
-    L"AviUtl2 Live Bridge version 0.9.6",
+    L"AviUtl2 Live Bridge version 0.9.7",
 };
 
 // Project-load registration may synchronously invoke its initial callback
