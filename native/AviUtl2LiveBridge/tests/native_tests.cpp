@@ -64,12 +64,22 @@ using aviutl2::live::TimelineTransactionResult;
 using aviutl2::live::PipeServer;
 using aviutl2::live::ProjectInfo;
 using aviutl2::live::ProjectInfoResult;
+using aviutl2::live::ProjectMutationResult;
 using aviutl2::live::RenderedAudioResult;
 using aviutl2::live::RenderedFrameResult;
 using aviutl2::live::SdkAdapter;
 using aviutl2::live::HostSdkAdapter;
 using aviutl2::live::SceneInfoResult;
 using aviutl2::live::SceneUpdate;
+using aviutl2::live::SceneListItem;
+using aviutl2::live::SceneListResult;
+using aviutl2::live::SceneCreateCommand;
+using aviutl2::live::ProjectCreateCommand;
+using aviutl2::live::ExportStartCommand;
+using aviutl2::live::ExportStartResult;
+using aviutl2::live::ObjectFlagKind;
+using aviutl2::live::ObjectFlagResult;
+using aviutl2::live::StableIdResult;
 using aviutl2::live::SnapshotObject;
 using aviutl2::live::SnapshotResult;
 using aviutl2::live::SplitMediaResult;
@@ -117,6 +127,96 @@ public:
         const SceneUpdate&) noexcept override {
         last_revision = expected_revision;
         return scene_result;
+    }
+
+    SceneListResult list_scenes_result;
+    ProjectMutationResult project_mutation_result;
+    ExportStartResult export_result;
+    ObjectFlagResult flag_result;
+    StableIdResult stable_id_result;
+    std::wstring last_effect_name;
+    ObjectFlagKind last_flag_kind = ObjectFlagKind::enable_group;
+    bool last_flag_value = false;
+    int last_scene_id = -1;
+    bool last_show_confirm = false;
+
+    [[nodiscard]] SceneListResult list_scenes() noexcept override {
+        ++scene_list_calls;
+        return list_scenes_result;
+    }
+
+    [[nodiscard]] ProjectMutationResult create_scene(
+        const SceneCreateCommand&) noexcept override {
+        ++scene_create_calls;
+        return project_mutation_result;
+    }
+
+    [[nodiscard]] ProjectMutationResult switch_scene(
+        const int scene_id) noexcept override {
+        last_scene_id = scene_id;
+        return project_mutation_result;
+    }
+
+    [[nodiscard]] ProjectMutationResult create_project(
+        const ProjectCreateCommand&) noexcept override {
+        ++project_create_calls;
+        return project_mutation_result;
+    }
+
+    [[nodiscard]] ProjectMutationResult open_project_file(
+        const std::wstring&,
+        const bool show_confirm) noexcept override {
+        ++project_open_calls;
+        last_show_confirm = show_confirm;
+        return project_mutation_result;
+    }
+
+    [[nodiscard]] ProjectMutationResult save_project_file(
+        const std::wstring&) noexcept override {
+        ++project_save_calls;
+        return project_mutation_result;
+    }
+
+    [[nodiscard]] ExportStartResult start_export(
+        const ExportStartCommand&) noexcept override {
+        ++export_calls;
+        return export_result;
+    }
+
+    [[nodiscard]] ObjectFlagResult get_object_flag(
+        const std::int64_t expected_revision,
+        const std::size_t,
+        const ObjectFlagKind kind) noexcept override {
+        last_revision = expected_revision;
+        last_flag_kind = kind;
+        return flag_result;
+    }
+
+    [[nodiscard]] ProjectMutationResult set_object_flag(
+        const std::int64_t expected_revision,
+        const std::size_t,
+        const ObjectFlagKind kind,
+        const bool flag) noexcept override {
+        last_revision = expected_revision;
+        last_flag_kind = kind;
+        last_flag_value = flag;
+        return project_mutation_result;
+    }
+
+    [[nodiscard]] StableIdResult get_object_id(
+        const std::int64_t expected_revision,
+        const std::size_t) noexcept override {
+        last_revision = expected_revision;
+        return stable_id_result;
+    }
+
+    [[nodiscard]] StableIdResult get_effect_id(
+        const std::int64_t expected_revision,
+        const std::size_t,
+        const std::wstring& effect) noexcept override {
+        last_revision = expected_revision;
+        last_effect_name = effect;
+        return stable_id_result;
     }
 
     [[nodiscard]] EffectCatalogResult get_effect_catalog(
@@ -737,6 +837,12 @@ public:
     int apply_calls = 0;
     int catalog_calls = 0;
     int layers_calls = 0;
+    int scene_list_calls = 0;
+    int scene_create_calls = 0;
+    int project_create_calls = 0;
+    int project_open_calls = 0;
+    int project_save_calls = 0;
+    int export_calls = 0;
     int snapshot_calls = 0;
     int set_items_calls = 0;
     int set_name_calls = 0;
@@ -2732,6 +2838,7 @@ void test_host_version_gates() {
                 !host->find("sdk_frame_marks")->as_bool() &&
                 !host->find("sdk_move_effect")->as_bool() &&
                 !host->find("sdk_object_rendering")->as_bool() &&
+                !host->find("sdk_scene_crud")->as_bool() &&
                 !host->find("sdk_section_endpoints")->as_bool(),
             "an unrecorded host version should keep every SDK gate off");
     }
@@ -2766,6 +2873,201 @@ void test_host_version_gates() {
     }
 
     aviutl2::live::store_host_version(0U);
+}
+
+void test_scene_crud_dispatch() {
+    FakeSdkAdapter sdk;
+    CommandDispatcher dispatcher(sdk, 4242U);
+
+    const auto call =
+        [&dispatcher](const std::string_view payload) {
+            return aviutl2::live::parse_json(
+                dispatcher.handle_payload(payload));
+        };
+
+    {
+        sdk.list_scenes_result = SceneListResult{};
+        sdk.list_scenes_result.ok = true;
+        sdk.list_scenes_result.scenes = {
+            SceneListItem{0, "Scene 0"},
+            SceneListItem{1, "Scene 1"},
+        };
+        const Json document = call(
+            R"({"id":"sl1","protocol_version":1,"method":"scene.list","params":{}})");
+        const Json* const result = document.find("result");
+        require(
+            document.find("ok")->as_bool() &&
+                result->find("count")->as_integer() == 2 &&
+                result->find("scenes")->as_array().at(0)
+                        .find("name")
+                        ->as_string() == "Scene 0" &&
+                result->find("scenes")->as_array().at(1)
+                        .find("scene_id")
+                        ->as_integer() == 1,
+            "scene.list should enumerate scene names");
+    }
+
+    {
+        sdk.project_mutation_result = ProjectMutationResult{};
+        sdk.project_mutation_result.ok = true;
+        sdk.project_mutation_result.revision = 77;
+        const Json document = call(
+            R"({"id":"sc1","protocol_version":1,"method":"scene.create","params":{"name":"New Scene","width":1920,"height":1080,"rate":30,"scale":1,"sample_rate":48000,"background":{"r":16,"g":32,"b":48}}})");
+        require(
+            document.find("ok")->as_bool() &&
+                document.find("result")
+                    ->find("revision")
+                    ->as_integer() == 77 &&
+                document.find("result")
+                    ->find("non_undoable")
+                    ->as_bool(),
+            "scene.create should report the post-create revision");
+    }
+
+    {
+        const Json document = call(
+            R"({"id":"sc2","protocol_version":1,"method":"scene.create","params":{"name":"New Scene","width":1920,"height":1080,"rate":30,"scale":1}})");
+        require(
+            !document.find("ok")->as_bool() &&
+                document.find("error")
+                    ->find("code")
+                    ->as_string() == "INVALID_ARGUMENT",
+            "scene.create without sample_rate should be rejected");
+    }
+
+    {
+        const Json document = call(
+            R"({"id":"sw1","protocol_version":1,"method":"scene.switch","params":{"scene_id":3}})");
+        require(
+            document.find("ok")->as_bool() &&
+                sdk.last_scene_id == 3,
+            "scene.switch should forward the scene id");
+    }
+
+    {
+        const Json document = call(
+            R"({"id":"pc1","protocol_version":1,"method":"project.create","params":{"width":1920,"height":1080,"rate":30,"scale":1,"sample_rate":48000,"show_confirm":false}})");
+        require(
+            document.find("ok")->as_bool() &&
+                !sdk.last_show_confirm,
+            "project.create should forward show_confirm");
+    }
+
+    {
+        const Json document = call(
+            R"({"id":"po1","protocol_version":1,"method":"project.open","params":{"file":"C:/video/test.aup2","show_confirm":false}})");
+        require(
+            document.find("ok")->as_bool() &&
+                !sdk.last_show_confirm,
+            "project.open should accept a project path");
+    }
+
+    {
+        const Json document = call(
+            R"({"id":"ps1","protocol_version":1,"method":"project.save","params":{"file":"C:/video/out.aup2"}})");
+        require(
+            document.find("ok")->as_bool(),
+            "project.save should accept a project path");
+    }
+
+    {
+        sdk.export_result = ExportStartResult{};
+        sdk.export_result.ok = true;
+        const Json document = call(
+            R"({"id":"ex1","protocol_version":1,"method":"export.start","params":{"output_file":"C:/video/out.mp4","output_plugin":"拡張編集ファイル出力"}})")
+            ;
+        require(
+            document.find("ok")->as_bool() &&
+                document.find("result")
+                    ->find("started")
+                    ->as_bool(),
+            "export.start should report the async start");
+    }
+
+    {
+        const Json document = call(
+            R"({"id":"ex2","protocol_version":1,"method":"export.start","params":{"output_file":"C:/video/out.mp4"}})");
+        require(
+            !document.find("ok")->as_bool() &&
+                document.find("error")
+                    ->find("code")
+                    ->as_string() == "INVALID_ARGUMENT",
+            "export.start without output_plugin should be rejected");
+    }
+
+    {
+        sdk.flag_result = ObjectFlagResult{};
+        sdk.flag_result.ok = true;
+        sdk.flag_result.flag = true;
+        const Json document = call(
+            R"({"id":"fg1","protocol_version":1,"method":"object.flag.get","params":{"expected_revision":42,"target":{"object_id":"obj-42-3"},"kind":"clipping_object"}})");
+        require(
+            document.find("ok")->as_bool() &&
+                document.find("result")
+                    ->find("flag")
+                    ->as_bool() &&
+                sdk.last_revision == 42,
+            "object.flag.get should read the requested flag");
+    }
+
+    {
+        sdk.project_mutation_result = ProjectMutationResult{};
+        sdk.project_mutation_result.ok = true;
+        sdk.project_mutation_result.revision = 43;
+        const Json document = call(
+            R"({"id":"fs1","protocol_version":1,"method":"object.flag.set","params":{"expected_revision":42,"target":{"object_id":"obj-42-3"},"kind":"enable_camera","flag":false}})");
+        require(
+            document.find("ok")->as_bool() &&
+                !sdk.last_flag_value &&
+                sdk.last_flag_kind ==
+                    aviutl2::live::ObjectFlagKind::enable_camera,
+            "object.flag.set should forward the flag write");
+    }
+
+    {
+        sdk.stable_id_result = StableIdResult{};
+        sdk.stable_id_result.ok = true;
+        sdk.stable_id_result.id = 9001;
+        const Json document = call(
+            R"({"id":"oi1","protocol_version":1,"method":"object.id.get","params":{"expected_revision":42,"target":{"object_id":"obj-42-3"}}})");
+        require(
+            document.find("ok")->as_bool() &&
+                document.find("result")
+                    ->find("id")
+                    ->as_integer() == 9001,
+            "object.id.get should return the stable object id");
+    }
+
+    {
+        const Json document = call(
+            R"({"id":"ei1","protocol_version":1,"method":"effect.id.get","params":{"expected_revision":42,"target":{"object_id":"obj-42-3"},"effect":"ドロップシャドウ"}})");
+        require(
+            document.find("ok")->as_bool() &&
+                sdk.last_effect_name == L"ドロップシャドウ",
+            "effect.id.get should resolve the named effect");
+    }
+
+    {
+        const Json document = call(
+            R"({"id":"du1","protocol_version":1,"method":"scene.duplicate","params":{}})");
+        require(
+            !document.find("ok")->as_bool() &&
+                document.find("error")
+                    ->find("code")
+                    ->as_string() == "SDK_METHOD_UNAVAILABLE",
+            "scene.duplicate should stay blocked without an SDK API");
+    }
+
+    {
+        const Json document = call(
+            R"({"id":"hu1","protocol_version":1,"method":"history.undo","params":{}})");
+        require(
+            !document.find("ok")->as_bool() &&
+                document.find("error")
+                    ->find("code")
+                    ->as_string() == "SDK_METHOD_UNAVAILABLE",
+            "history.undo should stay blocked without an SDK API");
+    }
 }
 
 int run_echo_server(const std::wstring& pipe_name) {
@@ -2814,6 +3116,7 @@ int main(const int argument_count, char** arguments) {
         test_sessions_events_and_audio();
         test_pipe_server();
         test_instance_registry();
+        test_scene_crud_dispatch();
         std::cout << "All AviUtl2LiveBridge native tests passed.\n";
         return 0;
     } catch (const std::exception& error) {

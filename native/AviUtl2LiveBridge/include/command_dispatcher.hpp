@@ -98,6 +98,26 @@ private:
     [[nodiscard]] std::string handle_scene(
         const Request& request,
         bool update);
+    [[nodiscard]] std::string handle_scene_list(
+        const Request& request);
+    [[nodiscard]] std::string handle_scene_create(
+        const Request& request);
+    [[nodiscard]] std::string handle_scene_switch(
+        const Request& request);
+    [[nodiscard]] std::string handle_project_create(
+        const Request& request);
+    [[nodiscard]] std::string handle_project_open(
+        const Request& request);
+    [[nodiscard]] std::string handle_project_save(
+        const Request& request);
+    [[nodiscard]] std::string handle_export_start(
+        const Request& request);
+    [[nodiscard]] std::string handle_object_flag(
+        const Request& request,
+        bool set);
+    [[nodiscard]] std::string handle_stable_id(
+        const Request& request,
+        bool effect);
     [[nodiscard]] std::string handle_create_from_alias(
         const Request& request);
     [[nodiscard]] std::string handle_batch(

@@ -43,6 +43,13 @@ struct ProjectInfoResult final {
     bool retryable = false;
 };
 
+struct EditColor final {
+    unsigned char r = 0;
+    unsigned char g = 0;
+    unsigned char b = 0;
+    unsigned char a = 255;
+};
+
 struct SceneInfo final {
     int scene_id = 0;
     std::string name;
@@ -51,6 +58,7 @@ struct SceneInfo final {
     int rate = 0;
     int scale = 0;
     int sample_rate = 0;
+    std::optional<EditColor> background;
 };
 
 struct SceneInfoResult final {
@@ -69,6 +77,83 @@ struct SceneUpdate final {
     std::optional<int> rate;
     std::optional<int> scale;
     std::optional<int> sample_rate;
+};
+
+struct SceneListItem final {
+    int scene_id = 0;
+    std::string name;
+};
+
+struct SceneListResult final {
+    bool ok = false;
+    std::vector<SceneListItem> scenes;
+    std::string error_code;
+    std::string error_message;
+    bool retryable = false;
+};
+
+struct SceneCreateCommand final {
+    std::wstring name;
+    std::wstring label;
+    int width = 0;
+    int height = 0;
+    int rate = 0;
+    int scale = 0;
+    int sample_rate = 0;
+    EditColor background;
+};
+
+struct ProjectCreateCommand final {
+    int width = 0;
+    int height = 0;
+    int rate = 0;
+    int scale = 0;
+    int sample_rate = 0;
+    EditColor background;
+    bool show_confirm = false;
+};
+
+struct ProjectMutationResult final {
+    bool ok = false;
+    std::int64_t revision = 0;
+    std::string error_code;
+    std::string error_message;
+    bool retryable = false;
+};
+
+struct ExportStartCommand final {
+    std::wstring file;
+    std::wstring output_plugin;
+};
+
+struct ExportStartResult final {
+    bool ok = false;
+    std::string error_code;
+    std::string error_message;
+    bool retryable = false;
+};
+
+enum class ObjectFlagKind final : int {
+    enable_group = 1,
+    enable_camera = 2,
+    clipping_object = 3,
+    clipping_upper_object = 4,
+};
+
+struct ObjectFlagResult final {
+    bool ok = false;
+    bool flag = false;
+    std::string error_code;
+    std::string error_message;
+    bool retryable = false;
+};
+
+struct StableIdResult final {
+    bool ok = false;
+    std::int64_t id = 0;
+    std::string error_code;
+    std::string error_message;
+    bool retryable = false;
 };
 
 struct CatalogItem final {
@@ -488,6 +573,36 @@ public:
     [[nodiscard]] virtual SceneInfoResult update_current_scene(
         std::int64_t expected_revision,
         const SceneUpdate& update) noexcept = 0;
+    [[nodiscard]] virtual SceneListResult list_scenes() noexcept = 0;
+    [[nodiscard]] virtual ProjectMutationResult create_scene(
+        const SceneCreateCommand& command) noexcept = 0;
+    [[nodiscard]] virtual ProjectMutationResult switch_scene(
+        int scene_id) noexcept = 0;
+    [[nodiscard]] virtual ProjectMutationResult create_project(
+        const ProjectCreateCommand& command) noexcept = 0;
+    [[nodiscard]] virtual ProjectMutationResult open_project_file(
+        const std::wstring& file,
+        bool show_confirm) noexcept = 0;
+    [[nodiscard]] virtual ProjectMutationResult save_project_file(
+        const std::wstring& file) noexcept = 0;
+    [[nodiscard]] virtual ExportStartResult start_export(
+        const ExportStartCommand& command) noexcept = 0;
+    [[nodiscard]] virtual ObjectFlagResult get_object_flag(
+        std::int64_t expected_revision,
+        std::size_t object_index,
+        ObjectFlagKind kind) noexcept = 0;
+    [[nodiscard]] virtual ProjectMutationResult set_object_flag(
+        std::int64_t expected_revision,
+        std::size_t object_index,
+        ObjectFlagKind kind,
+        bool flag) noexcept = 0;
+    [[nodiscard]] virtual StableIdResult get_object_id(
+        std::int64_t expected_revision,
+        std::size_t object_index) noexcept = 0;
+    [[nodiscard]] virtual StableIdResult get_effect_id(
+        std::int64_t expected_revision,
+        std::size_t object_index,
+        const std::wstring& effect) noexcept = 0;
     [[nodiscard]] virtual EffectCatalogResult get_effect_catalog(
         std::size_t start,
         std::size_t count) noexcept = 0;
@@ -648,9 +763,39 @@ public:
     [[nodiscard]] EditState get_edit_state() const noexcept override;
     [[nodiscard]] ProjectInfoResult get_project_info() noexcept override;
     [[nodiscard]] SceneInfoResult get_current_scene() noexcept override;
-    [[nodiscard]] SceneInfoResult update_current_scene(
+    [[nodiscard]] virtual SceneInfoResult update_current_scene(
         std::int64_t expected_revision,
         const SceneUpdate& update) noexcept override;
+    [[nodiscard]] SceneListResult list_scenes() noexcept override;
+    [[nodiscard]] ProjectMutationResult create_scene(
+        const SceneCreateCommand& command) noexcept override;
+    [[nodiscard]] ProjectMutationResult switch_scene(
+        int scene_id) noexcept override;
+    [[nodiscard]] ProjectMutationResult create_project(
+        const ProjectCreateCommand& command) noexcept override;
+    [[nodiscard]] ProjectMutationResult open_project_file(
+        const std::wstring& file,
+        bool show_confirm) noexcept override;
+    [[nodiscard]] ProjectMutationResult save_project_file(
+        const std::wstring& file) noexcept override;
+    [[nodiscard]] ExportStartResult start_export(
+        const ExportStartCommand& command) noexcept override;
+    [[nodiscard]] ObjectFlagResult get_object_flag(
+        std::int64_t expected_revision,
+        std::size_t object_index,
+        ObjectFlagKind kind) noexcept override;
+    [[nodiscard]] ProjectMutationResult set_object_flag(
+        std::int64_t expected_revision,
+        std::size_t object_index,
+        ObjectFlagKind kind,
+        bool flag) noexcept override;
+    [[nodiscard]] StableIdResult get_object_id(
+        std::int64_t expected_revision,
+        std::size_t object_index) noexcept override;
+    [[nodiscard]] StableIdResult get_effect_id(
+        std::int64_t expected_revision,
+        std::size_t object_index,
+        const std::wstring& effect) noexcept override;
     [[nodiscard]] EffectCatalogResult get_effect_catalog(
         std::size_t start,
         std::size_t count) noexcept override;

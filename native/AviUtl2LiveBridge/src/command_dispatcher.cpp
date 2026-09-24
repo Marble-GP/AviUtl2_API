@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <thread>
@@ -1053,10 +1054,40 @@ std::string CommandDispatcher::dispatch(const Request& request) {
             request.method == "mark.move") {
             return handle_marks(request, true);
         }
-        if (request.method == "scene.list" ||
-            request.method == "scene.create" ||
-            request.method == "scene.duplicate" ||
-            request.method == "scene.switch" ||
+        if (request.method == "scene.list") {
+            return handle_scene_list(request);
+        }
+        if (request.method == "scene.create") {
+            return handle_scene_create(request);
+        }
+        if (request.method == "scene.switch") {
+            return handle_scene_switch(request);
+        }
+        if (request.method == "project.create") {
+            return handle_project_create(request);
+        }
+        if (request.method == "project.open") {
+            return handle_project_open(request);
+        }
+        if (request.method == "project.save") {
+            return handle_project_save(request);
+        }
+        if (request.method == "export.start") {
+            return handle_export_start(request);
+        }
+        if (request.method == "object.flag.get") {
+            return handle_object_flag(request, false);
+        }
+        if (request.method == "object.flag.set") {
+            return handle_object_flag(request, true);
+        }
+        if (request.method == "object.id.get") {
+            return handle_stable_id(request, false);
+        }
+        if (request.method == "effect.id.get") {
+            return handle_stable_id(request, true);
+        }
+        if (request.method == "scene.duplicate" ||
             request.method == "history.undo" ||
             request.method == "history.redo") {
             return make_error_response(
@@ -1282,6 +1313,17 @@ Json CommandDispatcher::capabilities_result() const {
         Json("event.watch"),
         Json("scene.get_current"),
         Json("scene.update_current"),
+        Json("scene.list"),
+        Json("scene.create"),
+        Json("scene.switch"),
+        Json("project.create"),
+        Json("project.open"),
+        Json("project.save"),
+        Json("export.start"),
+        Json("object.flag.get"),
+        Json("object.flag.set"),
+        Json("object.id.get"),
+        Json("effect.id.get"),
         Json("effect.catalog"),
         Json("edit.plan.apply"),
         Json("edit.plan.validate"),
@@ -1359,6 +1401,8 @@ Json CommandDispatcher::capabilities_result() const {
               Json(host_version() >= kHostVersionMoveEffect)},
              {"sdk_object_rendering",
               Json(host_version() >= kHostVersionMoveEffect)},
+             {"sdk_scene_crud",
+              Json(host_version() >= kHostVersionSceneCrud)},
              {"sdk_section_endpoints",
               Json(host_version() >= kHostVersionSectionEndpoints)},
              {"version",
@@ -1618,6 +1662,7 @@ Json CommandDispatcher::capabilities_result() const {
              Json("object_updated"),
              Json("edit_frame_changed"),
              Json("edit_scene_changed"),
+             Json("edit_state_changed"),
              Json("focus_object_changed"),
              Json("project_loaded"),
              Json("project_saving"),
@@ -2160,6 +2205,566 @@ std::string CommandDispatcher::handle_scene(
             {"scene_id", Json(info.scene_id)},
             {"width", Json(info.width)},
         }));
+}
+
+std::string CommandDispatcher::handle_scene_list(
+    const Request& request) {
+    SceneListResult result = sdk_.list_scenes();
+    if (!result.ok) {
+        return make_error_response(
+            request.id,
+            result.error_code,
+            result.error_message,
+            {},
+            result.retryable);
+    }
+    Json::Array scenes;
+    scenes.reserve(result.scenes.size());
+    for (const SceneListItem& scene : result.scenes) {
+        scenes.push_back(
+            Json(Json::Object{
+                {"name", Json(scene.name)},
+                {"scene_id", Json(scene.scene_id)},
+            }));
+    }
+    return make_success_response(
+        request.id,
+        Json(Json::Object{
+            {"count",
+             Json(static_cast<std::int64_t>(result.scenes.size()))},
+            {"scenes", Json(std::move(scenes))},
+        }));
+}
+
+namespace {
+
+[[nodiscard]] std::optional<EditColor> parse_edit_color(
+    const Json* value,
+    std::string& message) {
+    if (value == nullptr) {
+        return EditColor{};
+    }
+    if (!value->is_object()) {
+        message = "background must be an object with r/g/b/a fields.";
+        return std::nullopt;
+    }
+    const auto channel =
+        [&value, &message](const std::string_view name,
+                           unsigned char& destination) -> bool {
+            const Json* field = value->find(name);
+            if (field == nullptr) {
+                destination = name == "a" ? 255U : 0U;
+                return true;
+            }
+            if (!field->is_integer() || field->as_integer() < 0 ||
+                field->as_integer() > 255) {
+                message =
+                    "background channels must be integers between 0 and 255.";
+                return false;
+            }
+            destination =
+                static_cast<unsigned char>(field->as_integer());
+            return true;
+        };
+    EditColor color;
+    if (!channel("r", color.r) || !channel("g", color.g) ||
+        !channel("b", color.b) || !channel("a", color.a)) {
+        return std::nullopt;
+    }
+    return color;
+}
+
+}  // namespace
+
+std::string CommandDispatcher::handle_scene_create(
+    const Request& request) {
+    const Json* name = find_field(request.params, "name");
+    if (name == nullptr || !name->is_string() ||
+        name->as_string().empty() ||
+        name->as_string().size() > 4096U) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "name must be a non-empty UTF-8 string within the size limit.");
+    }
+    const Json* label = find_field(request.params, "label");
+    if (label != nullptr &&
+        (!label->is_string() || label->as_string().size() > 4096U)) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "label must be a UTF-8 string within the size limit.");
+    }
+    constexpr std::int64_t max_int = std::numeric_limits<int>::max();
+    const auto positive =
+        [&](const std::string_view field,
+            int& destination) -> std::optional<std::string> {
+            const Json* value = find_field(request.params, field);
+            if (value == nullptr || !value->is_integer() ||
+                value->as_integer() <= 0 ||
+                value->as_integer() > max_int) {
+                return std::string(field) +
+                       " must be a positive integer.";
+            }
+            destination = static_cast<int>(value->as_integer());
+            return std::nullopt;
+        };
+    SceneCreateCommand command;
+    command.name = utf8_to_wide(name->as_string());
+    if (label != nullptr) {
+        command.label = utf8_to_wide(label->as_string());
+    }
+    if (const std::optional<std::string> error =
+            positive("width", command.width);
+        error.has_value()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            *error);
+    }
+    if (const std::optional<std::string> error =
+            positive("height", command.height);
+        error.has_value()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            *error);
+    }
+    if (const std::optional<std::string> error =
+            positive("rate", command.rate);
+        error.has_value()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            *error);
+    }
+    if (const std::optional<std::string> error =
+            positive("scale", command.scale);
+        error.has_value()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            *error);
+    }
+    if (const std::optional<std::string> error =
+            positive("sample_rate", command.sample_rate);
+        error.has_value()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            *error);
+    }
+    std::string color_message;
+    const std::optional<EditColor> background =
+        parse_edit_color(
+            find_field(request.params, "background"),
+            color_message);
+    if (!background.has_value()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            color_message);
+    }
+    command.background = *background;
+    ProjectMutationResult result = sdk_.create_scene(command);
+    if (!result.ok) {
+        return make_error_response(
+            request.id,
+            result.error_code,
+            result.error_message,
+            {},
+            result.retryable);
+    }
+    return make_success_response(
+        request.id,
+        Json(Json::Object{
+            {"non_undoable", Json(true)},
+            {"revision", Json(result.revision)},
+        }));
+}
+
+std::string CommandDispatcher::handle_scene_switch(
+    const Request& request) {
+    const Json* scene_id = find_field(request.params, "scene_id");
+    if (scene_id == nullptr || !scene_id->is_integer() ||
+        scene_id->as_integer() < 0 ||
+        scene_id->as_integer() >
+            std::numeric_limits<int>::max()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "scene_id must be a non-negative integer.");
+    }
+    ProjectMutationResult result =
+        sdk_.switch_scene(
+            static_cast<int>(scene_id->as_integer()));
+    if (!result.ok) {
+        return make_error_response(
+            request.id,
+            result.error_code,
+            result.error_message,
+            {},
+            result.retryable);
+    }
+    return make_success_response(
+        request.id,
+        Json(Json::Object{
+            {"non_undoable", Json(true)},
+            {"revision", Json(result.revision)},
+        }));
+}
+
+std::string CommandDispatcher::handle_project_create(
+    const Request& request) {
+    constexpr std::int64_t max_int = std::numeric_limits<int>::max();
+    const auto positive =
+        [&](const std::string_view field,
+            int& destination) -> std::optional<std::string> {
+            const Json* value = find_field(request.params, field);
+            if (value == nullptr || !value->is_integer() ||
+                value->as_integer() <= 0 ||
+                value->as_integer() > max_int) {
+                return std::string(field) + " must be a positive integer.";
+            }
+            destination = static_cast<int>(value->as_integer());
+            return std::nullopt;
+        };
+    ProjectCreateCommand command;
+    if (const std::optional<std::string> error =
+            positive("width", command.width);
+        error.has_value()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            *error);
+    }
+    if (const std::optional<std::string> error =
+            positive("height", command.height);
+        error.has_value()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            *error);
+    }
+    if (const std::optional<std::string> error =
+            positive("rate", command.rate);
+        error.has_value()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            *error);
+    }
+    if (const std::optional<std::string> error =
+            positive("scale", command.scale);
+        error.has_value()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            *error);
+    }
+    if (const std::optional<std::string> error =
+            positive("sample_rate", command.sample_rate);
+        error.has_value()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            *error);
+    }
+    std::string color_message;
+    const std::optional<EditColor> background =
+        parse_edit_color(
+            find_field(request.params, "background"),
+            color_message);
+    if (!background.has_value()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            color_message);
+    }
+    command.background = *background;
+    if (const Json* show_confirm =
+            find_field(request.params, "show_confirm");
+        show_confirm != nullptr) {
+        if (!show_confirm->is_bool()) {
+            return make_error_response(
+                request.id,
+                "INVALID_ARGUMENT",
+                "show_confirm must be a boolean.");
+        }
+        command.show_confirm = show_confirm->as_bool();
+    }
+    ProjectMutationResult result = sdk_.create_project(command);
+    if (!result.ok) {
+        return make_error_response(
+            request.id,
+            result.error_code,
+            result.error_message,
+            {},
+            result.retryable);
+    }
+    return make_success_response(
+        request.id,
+        Json(Json::Object{
+            {"non_undoable", Json(true)},
+            {"revision", Json(result.revision)},
+        }));
+}
+
+std::string CommandDispatcher::handle_project_open(
+    const Request& request) {
+    const Json* file = find_field(request.params, "file");
+    if (file == nullptr || !file->is_string() ||
+        file->as_string().empty() ||
+        file->as_string().size() > kMaxMediaPathCharacters) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "file must be a non-empty project file path within the "
+            "supported length.");
+    }
+    bool show_confirm = false;
+    if (const Json* confirm =
+            find_field(request.params, "show_confirm");
+        confirm != nullptr) {
+        if (!confirm->is_bool()) {
+            return make_error_response(
+                request.id,
+                "INVALID_ARGUMENT",
+                "show_confirm must be a boolean.");
+        }
+        show_confirm = confirm->as_bool();
+    }
+    ProjectMutationResult result =
+        sdk_.open_project_file(utf8_to_wide(file->as_string()),
+                               show_confirm);
+    if (!result.ok) {
+        return make_error_response(
+            request.id,
+            result.error_code,
+            result.error_message,
+            {},
+            result.retryable);
+    }
+    return make_success_response(
+        request.id,
+        Json(Json::Object{
+            {"non_undoable", Json(true)},
+            {"revision", Json(result.revision)},
+        }));
+}
+
+std::string CommandDispatcher::handle_project_save(
+    const Request& request) {
+    const Json* file = find_field(request.params, "file");
+    if (file == nullptr || !file->is_string() ||
+        file->as_string().empty() ||
+        file->as_string().size() > kMaxMediaPathCharacters) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "file must be a non-empty project file path within the "
+            "supported length.");
+    }
+    ProjectMutationResult result =
+        sdk_.save_project_file(utf8_to_wide(file->as_string()));
+    if (!result.ok) {
+        return make_error_response(
+            request.id,
+            result.error_code,
+            result.error_message,
+            {},
+            result.retryable);
+    }
+    return make_success_response(
+        request.id,
+        Json(Json::Object{
+            {"non_undoable", Json(true)},
+            {"revision", Json(result.revision)},
+        }));
+}
+
+std::string CommandDispatcher::handle_export_start(
+    const Request& request) {
+    const Json* file = find_field(request.params, "output_file");
+    if (file == nullptr || !file->is_string() ||
+        file->as_string().empty() ||
+        file->as_string().size() > kMaxMediaPathCharacters) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "output_file must be a non-empty output file path within the "
+            "supported length.");
+    }
+    const Json* plugin = find_field(request.params, "output_plugin");
+    if (plugin == nullptr || !plugin->is_string() ||
+        plugin->as_string().empty() ||
+        plugin->as_string().size() > 4096U) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "output_plugin must be a non-empty output plugin name.");
+    }
+    ExportStartCommand command;
+    command.file = utf8_to_wide(file->as_string());
+    command.output_plugin = utf8_to_wide(plugin->as_string());
+    ExportStartResult result = sdk_.start_export(command);
+    if (!result.ok) {
+        return make_error_response(
+            request.id,
+            result.error_code,
+            result.error_message,
+            {},
+            result.retryable);
+    }
+    return make_success_response(
+        request.id,
+        Json(Json::Object{
+            {"non_undoable", Json(true)},
+            {"started", Json(true)},
+        }));
+}
+
+std::string CommandDispatcher::handle_object_flag(
+    const Request& request,
+    const bool set) {
+    const TargetParseResult target =
+        parse_object_target(request.params);
+    if (!target.ok) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            target.message);
+    }
+    const Json* flag_value = find_field(request.params, "flag");
+    const char* kind_names[] = {
+        "enable_group",
+        "enable_camera",
+        "clipping_object",
+        "clipping_upper_object",
+    };
+    const Json* kind_value = find_field(request.params, "kind");
+    if (kind_value == nullptr || !kind_value->is_string()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "kind must be one of enable_group, enable_camera, "
+            "clipping_object, or clipping_upper_object.");
+    }
+    const std::string& kind_name = kind_value->as_string();
+    int kind_index = -1;
+    for (int index = 0; index < 4; ++index) {
+        if (kind_name == kind_names[index]) {
+            kind_index = index;
+            break;
+        }
+    }
+    if (kind_index < 0) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "kind must be one of enable_group, enable_camera, "
+            "clipping_object, or clipping_upper_object.");
+    }
+    const auto kind = static_cast<ObjectFlagKind>(kind_index + 1);
+    if (!set) {
+        ObjectFlagResult result = sdk_.get_object_flag(
+            target.target.revision,
+            target.target.index,
+            kind);
+        if (!result.ok) {
+            return make_error_response(
+                request.id,
+                result.error_code,
+                result.error_message,
+                {},
+                result.retryable);
+        }
+        return make_success_response(
+            request.id,
+            Json(Json::Object{
+                {"flag", Json(result.flag)},
+                {"kind", Json(kind_name)},
+            }));
+    }
+    if (flag_value == nullptr || !flag_value->is_bool()) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            "flag must be a boolean.");
+    }
+    ProjectMutationResult result = sdk_.set_object_flag(
+        target.target.revision,
+        target.target.index,
+        kind,
+        flag_value->as_bool());
+    if (!result.ok) {
+        return make_error_response(
+            request.id,
+            result.error_code,
+            result.error_message,
+            {},
+            result.retryable);
+    }
+    return make_success_response(
+        request.id,
+        Json(Json::Object{
+            {"kind", Json(kind_name)},
+            {"non_undoable", Json(true)},
+            {"revision", Json(result.revision)},
+        }));
+}
+
+std::string CommandDispatcher::handle_stable_id(
+    const Request& request,
+    const bool effect) {
+    const TargetParseResult target =
+        parse_object_target(request.params);
+    if (!target.ok) {
+        return make_error_response(
+            request.id,
+            "INVALID_ARGUMENT",
+            target.message);
+    }
+    std::wstring effect_name;
+    if (effect) {
+        const Json* name = find_field(request.params, "effect");
+        if (name == nullptr || !name->is_string() ||
+            name->as_string().empty()) {
+            return make_error_response(
+                request.id,
+                "INVALID_ARGUMENT",
+                "effect must be a non-empty effect name.");
+        }
+        effect_name = utf8_to_wide(name->as_string());
+    }
+    StableIdResult result =
+        effect
+            ? sdk_.get_effect_id(
+                  target.target.revision,
+                  target.target.index,
+                  effect_name)
+            : sdk_.get_object_id(
+                  target.target.revision,
+                  target.target.index);
+    if (!result.ok) {
+        return make_error_response(
+            request.id,
+            result.error_code,
+            result.error_message,
+            {},
+            result.retryable);
+    }
+    Json::Object response{
+        {"id", Json(result.id)},
+    };
+    if (effect) {
+        response.emplace("scope", Json("effect"));
+    } else {
+        response.emplace("scope", Json("object"));
+    }
+    return make_success_response(
+        request.id,
+        Json(std::move(response)));
 }
 
 std::string CommandDispatcher::handle_marks(

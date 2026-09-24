@@ -57,6 +57,7 @@ struct CapturedTimeline final {
     int rate = 0;
     int scale = 0;
     int sample_rate = 0;
+    std::optional<EditColor> background;
     std::vector<CapturedLayer> layers;
     std::vector<CapturedObject> objects;
 };
@@ -214,6 +215,14 @@ void hash_integer(
     timeline.rate = info.rate;
     timeline.scale = info.scale;
     timeline.sample_rate = info.sample_rate;
+    if (host_version() >= kHostVersionSceneCrud) {
+        timeline.background = EditColor{
+            info.background.r,
+            info.background.g,
+            info.background.b,
+            info.background.a,
+        };
+    }
     if (edit->get_scene_name != nullptr) {
         const LPCWSTR scene_name = edit->get_scene_name();
         if (scene_name != nullptr) {
@@ -804,6 +813,7 @@ void scene_read_callback(
             timeline.rate,
             timeline.scale,
             timeline.sample_rate,
+            timeline.background,
         };
         context.result.ok = true;
     } catch (const std::exception& error) {
@@ -923,6 +933,7 @@ void scene_update_callback(
             timeline.rate,
             timeline.scale,
             timeline.sample_rate,
+            timeline.background,
         };
         context.result.ok = true;
     } catch (const std::exception& error) {
@@ -3597,6 +3608,279 @@ void resolve_object_callback(
     }
 }
 
+// Scene CRUD, project file, export, object flag, and stable ID commands use
+// EDIT_HANDLE/EDIT_SECTION members added by the 2026-09-19 SDK baseline.
+// Every access is null-checked and gated on the verified host version,
+// matching the trailing-member policy in host_version.hpp.
+struct SceneEnumerationContext final {
+    SceneListResult* result = nullptr;
+    bool failed = false;
+};
+
+void scene_enum_callback(
+    void* parameter,
+    LPCWSTR name,
+    int scene_id) noexcept {
+    auto& context =
+        *static_cast<SceneEnumerationContext*>(parameter);
+    try {
+        if (name == nullptr) {
+            context.failed = true;
+            return;
+        }
+        context.result->scenes.push_back(
+            SceneListItem{scene_id, wide_to_utf8(name)});
+    } catch (...) {
+        context.failed = true;
+    }
+}
+
+// Object flag queries resolve the object handle and read the flag inside
+// one read section, because OBJECT_HANDLE stays valid only until the end
+// of the callback.
+struct ObjectFlagQueryContext final {
+    EDIT_HANDLE* edit_handle = nullptr;
+    std::int64_t expected_revision = 0;
+    std::size_t object_index = 0U;
+    ObjectFlagKind kind = ObjectFlagKind::enable_group;
+    ObjectFlagResult result;
+};
+
+void object_flag_query_callback(
+    void* parameter,
+    EDIT_SECTION* edit) noexcept {
+    auto& context =
+        *static_cast<ObjectFlagQueryContext*>(parameter);
+    try {
+        std::string error_code;
+        std::string error_message;
+        CapturedTimeline timeline;
+        if (!capture_timeline(
+                context.edit_handle,
+                edit,
+                timeline,
+                error_code,
+                error_message)) {
+            context.result.error_code =
+                error_code.empty()
+                    ? std::string("READ_SECTION_UNAVAILABLE")
+                    : error_code;
+            context.result.error_message =
+                error_message.empty()
+                    ? std::string(
+                          "AviUtl2 could not open a read section.")
+                    : error_message;
+            context.result.retryable = true;
+            return;
+        }
+        if (timeline.revision != context.expected_revision) {
+            context.result.error_code = "STALE_PROJECT_STATE";
+            context.result.error_message =
+                "The AviUtl2 project changed after the snapshot was captured.";
+            return;
+        }
+        if (context.object_index >= timeline.objects.size()) {
+            context.result.error_code = "OBJECT_NOT_FOUND";
+            context.result.error_message =
+                "The requested object index is outside the captured snapshot.";
+            return;
+        }
+        OBJECT_HANDLE handle =
+            timeline.objects[context.object_index].handle;
+        if (handle == nullptr ||
+            edit->get_object_flag == nullptr) {
+            context.result.error_code = "SDK_METHOD_UNAVAILABLE";
+            context.result.error_message =
+                "The AviUtl2 object flag API is unavailable.";
+            return;
+        }
+        context.result.flag = edit->get_object_flag(
+            handle,
+            static_cast<OBJECT_FLAG_TYPE>(
+                static_cast<int>(context.kind)));
+        context.result.ok = true;
+    } catch (...) {
+        context.result.error_code = "HOST_INSPECTION_FAILED";
+        context.result.error_message =
+            "AviUtl2 raised an error while reading the object flag.";
+    }
+}
+
+// Stable ID queries resolve the object (and optionally one named effect on
+// it) and read the int64_t ID inside one read section.
+struct StableObjectQueryContext final {
+    EDIT_HANDLE* edit_handle = nullptr;
+    std::int64_t expected_revision = 0;
+    std::size_t object_index = 0U;
+    // When set, resolve this effect name on the object and read its ID.
+    const std::wstring* effect_name = nullptr;
+    StableIdResult result;
+};
+
+void stable_id_query_callback(
+    void* parameter,
+    EDIT_SECTION* edit) noexcept {
+    auto& context =
+        *static_cast<StableObjectQueryContext*>(parameter);
+    try {
+        std::string error_code;
+        std::string error_message;
+        CapturedTimeline timeline;
+        if (!capture_timeline(
+                context.edit_handle,
+                edit,
+                timeline,
+                error_code,
+                error_message)) {
+            context.result.error_code =
+                error_code.empty()
+                    ? std::string("READ_SECTION_UNAVAILABLE")
+                    : error_code;
+            context.result.error_message =
+                error_message.empty()
+                    ? std::string(
+                          "AviUtl2 could not open a read section.")
+                    : error_message;
+            context.result.retryable = true;
+            return;
+        }
+        if (timeline.revision != context.expected_revision) {
+            context.result.error_code = "STALE_PROJECT_STATE";
+            context.result.error_message =
+                "The AviUtl2 project changed after the snapshot was captured.";
+            return;
+        }
+        if (context.object_index >= timeline.objects.size()) {
+            context.result.error_code = "OBJECT_NOT_FOUND";
+            context.result.error_message =
+                "The requested object index is outside the captured snapshot.";
+            return;
+        }
+        OBJECT_HANDLE handle =
+            timeline.objects[context.object_index].handle;
+        if (handle == nullptr) {
+            context.result.error_code = "OBJECT_NOT_FOUND";
+            context.result.error_message =
+                "The requested object has no live handle.";
+            return;
+        }
+        if (context.effect_name == nullptr) {
+            if (edit->get_object_id == nullptr) {
+                context.result.error_code = "SDK_METHOD_UNAVAILABLE";
+                context.result.error_message =
+                    "The AviUtl2 stable object ID API is unavailable.";
+                return;
+            }
+            context.result.id = edit->get_object_id(handle);
+        } else {
+            if (edit->find_effect == nullptr ||
+                edit->get_effect_id == nullptr) {
+                context.result.error_code = "SDK_METHOD_UNAVAILABLE";
+                context.result.error_message =
+                    "The AviUtl2 stable effect ID API is unavailable.";
+                return;
+            }
+            EFFECT_HANDLE effect = edit->find_effect(
+                handle,
+                context.effect_name->c_str());
+            if (effect == nullptr) {
+                context.result.error_code = "EFFECT_NOT_FOUND";
+                context.result.error_message =
+                    "The requested effect is not attached to the object.";
+                return;
+            }
+            context.result.id = edit->get_effect_id(effect);
+        }
+        context.result.ok = true;
+    } catch (...) {
+        context.result.error_code = "HOST_INSPECTION_FAILED";
+        context.result.error_message =
+            "AviUtl2 raised an error while reading the stable ID.";
+    }
+}
+
+// Object flag writes run inside an edit section because the SDK marks
+// set_object_flag as unusable from read sections. The previous flag value
+// is captured first so a failed verification rolls the change back.
+struct ObjectFlagEditContext final {
+    EDIT_HANDLE* edit_handle = nullptr;
+    std::int64_t expected_revision = 0;
+    std::size_t object_index = 0U;
+    ObjectFlagKind kind = ObjectFlagKind::enable_group;
+    bool flag = false;
+    ProjectMutationResult result;
+};
+
+void object_flag_edit_callback(
+    void* parameter,
+    EDIT_SECTION* edit) noexcept {
+    auto& context =
+        *static_cast<ObjectFlagEditContext*>(parameter);
+    try {
+        std::string error_code;
+        std::string error_message;
+        CapturedTimeline timeline;
+        if (!capture_timeline(
+                context.edit_handle,
+                edit,
+                timeline,
+                error_code,
+                error_message)) {
+            context.result.error_code =
+                error_code.empty()
+                    ? std::string("EDIT_SECTION_UNAVAILABLE")
+                    : error_code;
+            context.result.error_message =
+                error_message.empty()
+                    ? std::string(
+                          "AviUtl2 could not open an edit section.")
+                    : error_message;
+            context.result.retryable = true;
+            return;
+        }
+        if (timeline.revision != context.expected_revision) {
+            context.result.error_code = "STALE_PROJECT_STATE";
+            context.result.error_message =
+                "The AviUtl2 project changed after the snapshot was captured.";
+            return;
+        }
+        if (context.object_index >= timeline.objects.size()) {
+            context.result.error_code = "OBJECT_NOT_FOUND";
+            context.result.error_message =
+                "The requested object index is outside the captured snapshot.";
+            return;
+        }
+        OBJECT_HANDLE handle =
+            timeline.objects[context.object_index].handle;
+        if (handle == nullptr ||
+            edit->set_object_flag == nullptr ||
+            edit->get_object_flag == nullptr) {
+            context.result.error_code = "SDK_METHOD_UNAVAILABLE";
+            context.result.error_message =
+                "The AviUtl2 object flag API is unavailable.";
+            return;
+        }
+        const OBJECT_FLAG_TYPE type =
+            static_cast<OBJECT_FLAG_TYPE>(
+                static_cast<int>(context.kind));
+        const bool previous = edit->get_object_flag(handle, type);
+        edit->set_object_flag(handle, type, context.flag);
+        const bool applied = edit->get_object_flag(handle, type);
+        if (applied != context.flag) {
+            edit->set_object_flag(handle, type, previous);
+            context.result.error_code = "FLAG_WRITE_FAILED";
+            context.result.error_message =
+                "AviUtl2 did not apply the object flag change.";
+            return;
+        }
+        context.result.ok = true;
+    } catch (...) {
+        context.result.error_code = "HOST_MUTATION_FAILED";
+        context.result.error_message =
+            "AviUtl2 raised an error while writing the object flag.";
+    }
+}
+
 
 struct InspectContext final {
     EDIT_HANDLE* edit_handle = nullptr;
@@ -5968,6 +6252,464 @@ SceneInfoResult HostSdkAdapter::update_current_scene(
             {},
             "READ_SECTION_UNAVAILABLE",
             "AviUtl2 could not open a scene update section.",
+            true,
+        };
+    }
+    return std::move(context.result);
+}
+
+SceneListResult HostSdkAdapter::list_scenes() noexcept {
+    SceneListResult result;
+    if (edit_handle_ == nullptr ||
+        edit_handle_->enum_scene_name == nullptr) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 scene enumeration API is unavailable.";
+        return result;
+    }
+    if (host_version() < kHostVersionSceneCrud) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "Scene enumeration requires AviUtl2 2.1.10 or newer.";
+        return result;
+    }
+    SceneEnumerationContext context{&result, false};
+    edit_handle_->enum_scene_name(
+        &context,
+        scene_enum_callback);
+    if (context.failed) {
+        result.scenes.clear();
+        result.error_code = "SCENE_ENUMERATION_FAILED";
+        result.error_message =
+            "AviUtl2 failed to enumerate the scene names.";
+        return result;
+    }
+    result.ok = true;
+    return result;
+}
+
+ProjectMutationResult HostSdkAdapter::create_scene(
+    const SceneCreateCommand& command) noexcept {
+    ProjectMutationResult result;
+    if (edit_handle_ == nullptr ||
+        edit_handle_->create_scene == nullptr) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 scene creation API is unavailable.";
+        return result;
+    }
+    if (host_version() < kHostVersionSceneCrud) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "Scene creation requires AviUtl2 2.1.10 or newer.";
+        return result;
+    }
+    if (command.name.empty() || command.width <= 0 ||
+        command.height <= 0 || command.rate <= 0 ||
+        command.scale <= 0 || command.sample_rate <= 0) {
+        result.error_code = "INVALID_ARGUMENT";
+        result.error_message =
+            "A scene name and positive size/rate values are required.";
+        return result;
+    }
+    if (!edit_handle_->create_scene(
+            command.name.c_str(),
+            command.label.empty() ? nullptr : command.label.c_str(),
+            command.width,
+            command.height,
+            command.rate,
+            command.scale,
+            command.sample_rate,
+            EDIT_INFO::COLOR{
+                command.background.r,
+                command.background.g,
+                command.background.b,
+                command.background.a,
+            })) {
+        result.error_code = "SCENE_CREATE_FAILED";
+        result.error_message =
+            "AviUtl2 refused the scene creation (the host may be exporting).";
+        return result;
+    }
+    SnapshotResult snapshot = get_snapshot();
+    if (snapshot.ok) {
+        result.revision = snapshot.revision;
+    }
+    result.ok = true;
+    return result;
+}
+
+ProjectMutationResult HostSdkAdapter::switch_scene(
+    const int scene_id) noexcept {
+    ProjectMutationResult result;
+    if (edit_handle_ == nullptr ||
+        edit_handle_->select_scene == nullptr) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 scene switching API is unavailable.";
+        return result;
+    }
+    if (host_version() < kHostVersionSceneCrud) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "Scene switching requires AviUtl2 2.1.10 or newer.";
+        return result;
+    }
+    if (scene_id < 0) {
+        result.error_code = "INVALID_ARGUMENT";
+        result.error_message =
+            "scene_id must be a non-negative integer.";
+        return result;
+    }
+    if (!edit_handle_->select_scene(scene_id)) {
+        result.error_code = "SCENE_SWITCH_FAILED";
+        result.error_message =
+            "AviUtl2 refused the scene switch (the scene may not exist or "
+            "the host may be exporting).";
+        return result;
+    }
+    SnapshotResult snapshot = get_snapshot();
+    if (snapshot.ok) {
+        result.revision = snapshot.revision;
+    }
+    result.ok = true;
+    return result;
+}
+
+ProjectMutationResult HostSdkAdapter::create_project(
+    const ProjectCreateCommand& command) noexcept {
+    ProjectMutationResult result;
+    if (edit_handle_ == nullptr ||
+        edit_handle_->create_project == nullptr) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 project creation API is unavailable.";
+        return result;
+    }
+    if (host_version() < kHostVersionSceneCrud) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "Project creation requires AviUtl2 2.1.10 or newer.";
+        return result;
+    }
+    if (command.width <= 0 || command.height <= 0 ||
+        command.rate <= 0 || command.scale <= 0 ||
+        command.sample_rate <= 0) {
+        result.error_code = "INVALID_ARGUMENT";
+        result.error_message =
+            "Positive project size/rate values are required.";
+        return result;
+    }
+    if (!edit_handle_->create_project(
+            command.width,
+            command.height,
+            command.rate,
+            command.scale,
+            command.sample_rate,
+            EDIT_INFO::COLOR{
+                command.background.r,
+                command.background.g,
+                command.background.b,
+                command.background.a,
+            },
+            command.show_confirm)) {
+        result.error_code = "PROJECT_CREATE_FAILED";
+        result.error_message =
+            "AviUtl2 refused the project creation (the host may be "
+            "exporting or the dialog was cancelled).";
+        return result;
+    }
+    SnapshotResult snapshot = get_snapshot();
+    if (snapshot.ok) {
+        result.revision = snapshot.revision;
+    }
+    result.ok = true;
+    return result;
+}
+
+ProjectMutationResult HostSdkAdapter::open_project_file(
+    const std::wstring& file,
+    const bool show_confirm) noexcept {
+    ProjectMutationResult result;
+    if (edit_handle_ == nullptr ||
+        edit_handle_->open_project_file == nullptr) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 project open API is unavailable.";
+        return result;
+    }
+    if (host_version() < kHostVersionSceneCrud) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "Project opening requires AviUtl2 2.1.10 or newer.";
+        return result;
+    }
+    if (file.empty() || file.size() > kMaxMediaPathCharacters) {
+        result.error_code = "INVALID_ARGUMENT";
+        result.error_message =
+            "A project file path within the supported length is required.";
+        return result;
+    }
+    if (!edit_handle_->open_project_file(
+            file.c_str(),
+            show_confirm)) {
+        result.error_code = "PROJECT_OPEN_FAILED";
+        result.error_message =
+            "AviUtl2 refused to open the project file (the host may be "
+            "exporting or the file is invalid).";
+        return result;
+    }
+    observe_project_file_path(file);
+    SnapshotResult snapshot = get_snapshot();
+    if (snapshot.ok) {
+        result.revision = snapshot.revision;
+    }
+    result.ok = true;
+    return result;
+}
+
+ProjectMutationResult HostSdkAdapter::save_project_file(
+    const std::wstring& file) noexcept {
+    ProjectMutationResult result;
+    if (edit_handle_ == nullptr ||
+        edit_handle_->save_project_file == nullptr) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 project save API is unavailable.";
+        return result;
+    }
+    if (host_version() < kHostVersionSceneCrud) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "Project saving requires AviUtl2 2.1.10 or newer.";
+        return result;
+    }
+    if (file.empty() || file.size() > kMaxMediaPathCharacters) {
+        result.error_code = "INVALID_ARGUMENT";
+        result.error_message =
+            "A project file path within the supported length is required.";
+        return result;
+    }
+    if (!edit_handle_->save_project_file(file.c_str())) {
+        result.error_code = "PROJECT_SAVE_FAILED";
+        result.error_message =
+            "AviUtl2 refused to save the project file.";
+        return result;
+    }
+    SnapshotResult snapshot = get_snapshot();
+    if (snapshot.ok) {
+        result.revision = snapshot.revision;
+    }
+    result.ok = true;
+    return result;
+}
+
+ExportStartResult HostSdkAdapter::start_export(
+    const ExportStartCommand& command) noexcept {
+    ExportStartResult result;
+    if (edit_handle_ == nullptr ||
+        edit_handle_->output_file == nullptr) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 file export API is unavailable.";
+        return result;
+    }
+    if (host_version() < kHostVersionSceneCrud) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "File export requires AviUtl2 2.1.10 or newer.";
+        return result;
+    }
+    if (command.file.empty() ||
+        command.file.size() > kMaxMediaPathCharacters ||
+        command.output_plugin.empty()) {
+        result.error_code = "INVALID_ARGUMENT";
+        result.error_message =
+            "An output file path and output plugin name are required.";
+        return result;
+    }
+    if (const EditState state = get_edit_state();
+        state == EditState::save) {
+        result.error_code = "EXPORT_ALREADY_RUNNING";
+        result.error_message =
+            "AviUtl2 is already exporting a file.";
+        return result;
+    }
+    if (!edit_handle_->output_file(
+            command.file.c_str(),
+            command.output_plugin.c_str(),
+            nullptr,
+            nullptr)) {
+        result.error_code = "EXPORT_START_FAILED";
+        result.error_message =
+            "AviUtl2 refused to start the file output (check the output "
+            "plugin name and the current edit state).";
+        return result;
+    }
+    result.ok = true;
+    return result;
+}
+
+ObjectFlagResult HostSdkAdapter::get_object_flag(
+    const std::int64_t expected_revision,
+    const std::size_t object_index,
+    const ObjectFlagKind kind) noexcept {
+    ObjectFlagResult result;
+    if (edit_handle_ == nullptr) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 edit handle is unavailable.";
+        return result;
+    }
+    if (host_version() < kHostVersionSceneCrud) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "Object flags require AviUtl2 2.1.10 or newer.";
+        return result;
+    }
+    ObjectFlagQueryContext context{
+        edit_handle_,
+        expected_revision,
+        object_index,
+        kind,
+        {},
+    };
+    if (!edit_handle_->call_read_section_param(
+            &context,
+            object_flag_query_callback)) {
+        return ObjectFlagResult{
+            false,
+            false,
+            "READ_SECTION_UNAVAILABLE",
+            "AviUtl2 could not open a read section.",
+            true,
+        };
+    }
+    return std::move(context.result);
+}
+
+ProjectMutationResult HostSdkAdapter::set_object_flag(
+    const std::int64_t expected_revision,
+    const std::size_t object_index,
+    const ObjectFlagKind kind,
+    const bool flag) noexcept {
+    ProjectMutationResult result;
+    if (edit_handle_ == nullptr) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 edit handle is unavailable.";
+        return result;
+    }
+    if (host_version() < kHostVersionSceneCrud) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "Object flags require AviUtl2 2.1.10 or newer.";
+        return result;
+    }
+    ObjectFlagEditContext context{
+        edit_handle_,
+        expected_revision,
+        object_index,
+        kind,
+        flag,
+        {},
+    };
+    if (!edit_handle_->call_edit_section_param(
+            &context,
+            object_flag_edit_callback)) {
+        return ProjectMutationResult{
+            false,
+            -1,
+            "EDIT_SECTION_UNAVAILABLE",
+            "AviUtl2 could not open an edit section.",
+            true,
+        };
+    }
+    if (context.result.ok) {
+        context.result.revision = -1;
+        SnapshotResult snapshot = get_snapshot();
+        if (snapshot.ok) {
+            context.result.revision = snapshot.revision;
+        }
+    }
+    return std::move(context.result);
+}
+
+StableIdResult HostSdkAdapter::get_object_id(
+    const std::int64_t expected_revision,
+    const std::size_t object_index) noexcept {
+    StableIdResult result;
+    if (edit_handle_ == nullptr) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 edit handle is unavailable.";
+        return result;
+    }
+    if (host_version() < kHostVersionSceneCrud) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "Stable object IDs require AviUtl2 2.1.10 or newer.";
+        return result;
+    }
+    StableObjectQueryContext context{
+        edit_handle_,
+        expected_revision,
+        object_index,
+        nullptr,
+        {},
+    };
+    if (!edit_handle_->call_read_section_param(
+            &context,
+            stable_id_query_callback)) {
+        return StableIdResult{
+            false,
+            0,
+            "READ_SECTION_UNAVAILABLE",
+            "AviUtl2 could not open a read section.",
+            true,
+        };
+    }
+    return std::move(context.result);
+}
+
+StableIdResult HostSdkAdapter::get_effect_id(
+    const std::int64_t expected_revision,
+    const std::size_t object_index,
+    const std::wstring& effect) noexcept {
+    StableIdResult result;
+    if (edit_handle_ == nullptr) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "The AviUtl2 edit handle is unavailable.";
+        return result;
+    }
+    if (host_version() < kHostVersionSceneCrud) {
+        result.error_code = "SDK_METHOD_UNAVAILABLE";
+        result.error_message =
+            "Stable effect IDs require AviUtl2 2.1.10 or newer.";
+        return result;
+    }
+    if (effect.empty()) {
+        result.error_code = "INVALID_ARGUMENT";
+        result.error_message =
+            "A non-empty effect name is required.";
+        return result;
+    }
+    StableObjectQueryContext context{
+        edit_handle_,
+        expected_revision,
+        object_index,
+        &effect,
+        {},
+    };
+    if (!edit_handle_->call_read_section_param(
+            &context,
+            stable_id_query_callback)) {
+        return StableIdResult{
+            false,
+            0,
+            "READ_SECTION_UNAVAILABLE",
+            "AviUtl2 could not open a read section.",
             true,
         };
     }

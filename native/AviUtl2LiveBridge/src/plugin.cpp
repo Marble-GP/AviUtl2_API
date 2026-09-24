@@ -52,6 +52,7 @@ char kObjectUpdatedEvent[] = "object_updated";
 char kEditFrameChangedEvent[] = "edit_frame_changed";
 char kEditSceneChangedEvent[] = "edit_scene_changed";
 char kFocusObjectChangedEvent[] = "focus_object_changed";
+char kEditStateChangedEvent[] = "edit_state_changed";
 
 void record_project_lifecycle(
     PROJECT_FILE* project,
@@ -790,6 +791,10 @@ EXTERN_C __declspec(dllexport) void RegisterPlugin(HOST_APP_TABLE* host) {
             host->register_event_listener(
                 EVENT_TYPE::CHANGE_FOCUS_OBJECT,
                 kFocusObjectChangedEvent,
+                bridge_event_callback);
+            host->register_event_listener(
+                EVENT_TYPE::CHANGE_EDIT_STATE,
+                kEditStateChangedEvent,
                 bridge_event_callback);
         }
         g_external_api_allowed.store(false, std::memory_order_release);

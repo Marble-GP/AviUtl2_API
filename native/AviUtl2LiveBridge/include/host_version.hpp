@@ -17,6 +17,13 @@ inline constexpr std::uint32_t kHostVersionMoveEffect = 2010300U;
 // added the frame-mark members and set_palette_info to EDIT_SECTION.
 inline constexpr std::uint32_t kHostVersionSectionEndpoints = 2010400U;
 
+// AviUtl2 2.1.10 added the 2026-09-19 SDK members: EDIT_SECTION object flags
+// and stable IDs, EDIT_HANDLE scene CRUD, project file, and export members,
+// the EDIT_INFO background color, and the CHANGE_EDIT_STATE event type. The
+// mirror changelog dates these additions to 2026-09-19; 2.1.10 is the lowest
+// host verified to provide them.
+inline constexpr std::uint32_t kHostVersionSceneCrud = 2011000U;
+
 // Records the AviUtl2 host version passed to InitializePlugin. Call it before
 // any trailing SDK member is read; an unrecorded version stays 0 and keeps
 // every gated feature off.
