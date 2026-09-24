@@ -158,6 +158,6 @@ stack with the pre-Undo Live result. The original source must remain unchanged.
 ## SDK baseline
 
 `third_party/aviutl2_sdk` is pinned to mirror commit
-`64da7ddacabc6433753fa128c82483618d87bfc3`. See
+`640ab829d7915247b233f9de6a936d2a20ad0ffc`. See
 `third_party/aviutl2_sdk.BASELINE.md` for provenance and hashes. Never edit the SDK
 headers locally.
