@@ -21,6 +21,32 @@ AviUtl ver.2 uses a text-based project format (.aup2) similar to INI files. This
 - **Live Bridge (experimental)**: Connect to the currently open AviUtl2 project over
   a local Windows named pipe
 
+## What's New in 0.10.0
+
+0.10.0 completes the 2026-09-19 official SDK mirror adoption with scene
+management, project files, file export, and MCP Phase 1, all gated on
+AviUtl2 2.1.10 (`sdk_scene_crud` host flag) and failing closed on older hosts.
+
+- **Scene CRUD** (`scene.list` / `scene.create` / `scene.switch`) on 2.1.10+,
+  plus scene background color in `scene.get_current` / `scene.update_current`.
+  Scene delete and duplicate stay unsupported (no official SDK API).
+- **Project files** (`project.create` / `project.open` / `project.save`) with
+  explicit `show_confirm=false` automation handling.
+- **File export** (`export.start`): async export through a host output plugin
+  (e.g. `MP4 Exporter (by えすご/Esugo)`); the plugin name is caller-supplied
+  because the SDK has no enumeration API. Completion detection uses the
+  sequenced `edit_state_changed` event stream (null payload) combined with
+  `edit_state` polling and an output-file existence probe.
+- **Object flags** (`object.flag.get` / `object.flag.set`) for group, camera,
+  and clipping flags with revision-checked writes and rollback.
+- **Stable IDs** (`object.id.get` / `effect.id.get`): SDK int64 identifiers.
+- **MCP Phase 1**: the `aviutl2-mcp` entry point serves nine hub-spoke tools
+  over stdio (`pip install 'aviutl2-api[mcp]'`). Host-gated, fail-closed, and
+  bundled with this repository.
+
+The 1.0 release gate now only waits for `sdk_undo_redo`; see
+[`protocol/CAPABILITIES_0.10.0.json`](protocol/CAPABILITIES_0.10.0.json).
+
 ## What's New in 0.9.7
 
 0.9.7 adopts the 2026-09-05 official SDK mirror and adds host-gated native
@@ -158,7 +184,7 @@ serialize_to_file(project, "output.aup2")
 json_data = to_json(project)
 ```
 
-### Live Bridge (0.9.7 beta)
+### Live Bridge (0.10.0 beta)
 
 `LiveProject` is the standard entry point for short, revision-safe edits of the
 project currently open in AviUtl2:
@@ -476,10 +502,12 @@ still fail closed. Disabled standard Effects use AviUtl2's canonical
 `effect.disable=1` marker. The manual Open/Save gate is available in
 `tests/manual/aup2_effect_roundtrip.py`.
 
-The current official SDK cannot list/create/duplicate/switch scenes or execute
-Undo/Redo. Those capabilities are reported as false, calls fail with
-`SDK_METHOD_UNAVAILABLE`, and the 1.0 release gate remains closed. See
-[`protocol/CAPABILITIES_0.9.7.json`](protocol/CAPABILITIES_0.9.7.json).
+The current official SDK cannot delete/duplicate scenes or execute Undo/Redo.
+Scene listing, creation, switching, project create/open/save, and file export
+are native on 2.1.10+. Scene delete/duplicate and undo/redo fail with
+`SDK_METHOD_UNAVAILABLE`, and the 1.0 release gate still waits for
+`sdk_undo_redo`. See
+[`protocol/CAPABILITIES_0.10.0.json`](protocol/CAPABILITIES_0.10.0.json).
 
 Render an exact composite frame with the running AviUtl2 process:
 
@@ -686,8 +714,8 @@ to PyPI using a project-scoped API token and creates a GitHub Release containing
 `AviUtl2LiveBridge.aux2` and its SHA-256 checksum:
 
 ```bash
-git tag v0.9.7
-git push origin v0.9.7
+git tag v0.10.0
+git push origin v0.10.0
 ```
 
 The tag without its leading `v` must exactly match `project.version` in
@@ -714,6 +742,7 @@ Start here:
   Default `LiveProject`/`EditPlan` workflow for AI agents
 - [Live Bridge Agent API Manual](docs/LIVE_BRIDGE_AGENT_API_MANUAL.md) -
   Complete Python API, safety rules, errors, and advanced operations
+- [v0.10.0 Release Notes](docs/releases/v0.10.0.md) -
 - [v0.9.7 Release Notes](docs/releases/v0.9.7.md) -
 - [v0.9.6 Release Notes](docs/releases/v0.9.6.md) -
   Upgrade steps, high-level API examples, compatibility, and known constraints

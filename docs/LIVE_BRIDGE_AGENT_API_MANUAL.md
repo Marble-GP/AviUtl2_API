@@ -1,6 +1,86 @@
 # AviUtl2 Live Bridge エージェント向け完全APIマニュアル
 
-> Current target: Python package / plugin 0.9.7, additive protocol v1.
+> Current target: Python package / plugin 0.10.0, additive protocol v1.
+
+## 0.10.0: scene CRUD, project files, export, and MCP Phase 1
+
+0.10.0 completes the 2026-09-19 official SDK mirror (`mirror-2026-09-19`)
+adoption. All new paths are gated on host version 2011000 (AviUtl2 2.1.10)
+through the `sdk_scene_crud` host flag; older hosts fail closed with
+`SDK_METHOD_UNAVAILABLE`. Unsupported operations stay non-exposed.
+
+| Host capability | Minimum AviUtl2 | Unlocked |
+|---|---|---|
+| `sdk_move_effect` | 2.1.3 (2010300) | native effect reorder, object-level rendering |
+| `sdk_section_endpoints` | 2.1.4 (2010400) | native media trim, frame marks |
+| `sdk_scene_crud` | 2.1.10 (2011000) | scene CRUD, background color, project files, export, object flags, stable IDs |
+
+- Scene CRUD: `scene.list` / `scene.create` / `scene.switch`. Scene background
+  color rides in `scene.get_current` / `scene.update_current` as 0-255 RGBA.
+  Scene delete and duplicate have no official SDK API and answer
+  `SDK_METHOD_UNAVAILABLE` (they are also hidden from the MCP catalog).
+- Project files: `project.create` / `project.open` / `project.save`. The
+  bridge passes `show_confirm=false` so no modal dialog blocks automation.
+- Object flags: `object.flag.get` / `object.flag.set` for `group`, `camera`,
+  and `clipping`. Writes are revision-checked with apply-before-value
+  rollback and run in the edit section per SDK requirements.
+- Stable IDs: `object.id.get` / `effect.id.get` return the SDK int64
+  identifiers as `{id, scope}`.
+- `edit_state_changed` is a registered sequenced notification covering edit,
+  preview playback, and file output transitions.
+- Feature-detect at runtime via `host.sdk_scene_crud` (do not branch on the
+  plugin version string).
+
+### Export completion detection (recommended procedure)
+
+`export.start` only starts the output; completion is asynchronous and the
+`edit_state_changed` event payload is null. Combine all three signals:
+
+1. `event.watch` for `edit_state_changed` (fires on output start and end).
+2. Poll `project.get_info` -> `edit_state` until it returns `edit` again.
+3. Probe the output file for existence and stable size.
+
+```python
+import time
+from aviutl2_api.live import LiveClient
+
+with LiveClient.connect(pid=12345) as client:
+    receipt = client.start_export(
+        "output.mp4",
+        output_plugin="MP4 Exporter (by えすご/Esugo)",
+    )
+    deadline = time.monotonic() + 300
+    while time.monotonic() < deadline:
+        info = client.get_project_info()
+        if info.edit_state == "edit" and output_exists_and_stable():
+            break
+        time.sleep(0.5)
+```
+
+The output plugin name is caller-supplied because the official SDK exposes no
+enumeration API (only `register_output_plugin`). Names are the plugin display
+names as shown in AviUtl2's output plugin list, for example
+`MP4 Exporter (by えすご/Esugo)` (Windows-local UTF-16 names; scan the plugin
+folder with a UTF-16LE reader if the exact display name is unknown).
+
+### MCP Phase 1 (bundled stdio server)
+
+Install with the `mcp` extra and run the entry point on the agent host:
+
+```bash
+pip install 'aviutl2-api[mcp]'
+aviutl2-mcp
+```
+
+Register it in the MCP client (for example Claude Desktop) as a stdio server
+running `<python> -m aviutl2_api.mcp.server`. The plugin itself never spawns
+MCP; the server connects to ONE running AviUtl2 instance over the local
+Windows named pipe. Nine hub-spoke tools: `bridge_card`, `bridge_status`,
+`bridge_call`, `bridge_help`, `bridge_find`, `bridge_snapshot`,
+`bridge_render_object`, `bridge_render_object_audio`, `bridge_watch_events`.
+Method exposure derives from the running host capability manifest, fails
+closed before any pipe traffic, and hides unsupported methods from the
+catalog. Non-undoable calls require explicit `confirm_non_undoable=true`.
 
 ## 0.9.7: native editing, frame marks, and object rendering
 
@@ -51,13 +131,13 @@ The 0.9.6 layers below are unchanged and remain compatible.
   `project_saving` are observations; the latter occurs before save and does not
   prove success.
 
-対象バージョン: plugin / Python client 0.9.7
+対象バージョン: plugin / Python client 0.10.0
 
 Wire protocol: v1 additive
 
 対象OS: Windows
 
-最終更新: 2026-08-02
+最終更新: 2026-09-26
 
 ## 0.9.5の主な変更
 
@@ -1999,11 +2079,13 @@ pretend to command AviUtl2.
 
 - `docs/AGENT_API_CARD.md`: LLMへ渡す最小の英語中心API契約
 - `docs/LIVE_BRIDGE_AGENT_QUICK_START.md`: Agent向け最短workflow
-- `docs/releases/v0.9.7.md`: 0.9.7?????????????
+- `docs/releases/v0.10.0.md`: 0.10.0の更新・実機検証結果と移行手順
+- `docs/releases/v0.9.7.md`: 0.9.7の更新・移行手順と既知制約
 - `docs/releases/v0.9.6.md`: 0.9.6の更新・移行手順と既知制約
 - `docs/LIVE_BRIDGE_PROTOCOL.md`: Wire protocol設計と実装根拠
 - `docs/LIVE_BRIDGE_DEVELOPMENT.md`: native build、security回帰、manual integration
 - `docs/aup2_format_specification.md`: `.aup2` parser/serializer実装ノート
-- `protocol/CAPABILITIES_0.9.7.json`: ??capability manifest
+- `protocol/CAPABILITIES_0.10.0.json`: 静的capability manifest（現行）
+- `protocol/CAPABILITIES_0.9.7.json`: 静的capability manifest
 - `protocol/CAPABILITIES_0.9.6.json`: 静的capability manifest
 - `protocol/CHANGELOG.md`: protocol変更履歴

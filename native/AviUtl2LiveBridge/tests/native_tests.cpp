@@ -1659,7 +1659,7 @@ void test_protocol_and_fixtures() {
             capability_result
                     ->find("aup2_effect_manifest_version")
                     ->as_integer() == 2001901,
-        "0.9.7 semantic Effect capabilities should be explicit");
+        "0.10.0 semantic Effect capabilities should be explicit");
 
     const std::string batch_validate_request =
         read_file(fixture_dir / "batch_validate.request.json");

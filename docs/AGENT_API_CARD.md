@@ -1,30 +1,37 @@
-# AviUtl2 API 0.9.7 — Agent API Card
+# AviUtl2 API 0.10.0 — Agent API Card
 
 This is the smallest recommended context for an LLM that writes editing code.
 Use the complete manual only when an operation is not covered here.
 
-## What 0.9.7 adds (host-gated)
+## What 0.10.0 adds (host-gated)
 
 New SDK paths are gated on the running AviUtl2 version. Feature-detect via
 `system.get_capabilities` -> `host`: `sdk_move_effect` and
 `sdk_object_rendering` need AviUtl2 2.1.3+, `sdk_frame_marks` and
-`sdk_section_endpoints` need 2.1.4+. Older hosts keep the 0.9.6 alias
-fallbacks and fail closed with explicit errors.
+`sdk_section_endpoints` need 2.1.4+, and everything below needs 2.1.10+
+(`sdk_scene_crud`). Older hosts fail closed with explicit
+`SDK_METHOD_UNAVAILABLE` errors.
 
-- Native `object.effect.reorder` (`reorder_backend: "sdk_move_effect"`): the
-  object identity stays stable, no alias replacement round-trip.
-- Native `media.trim` (`backend: "native"`): fixed-speed media, collision
-  preflight before any mutation, LIFO rollback, read-back verification.
-- `mark.list` / `mark.set` / `mark.clear` / `mark.move`: occupancy-checked and
-  revision-checked, explicitly non-undoable. Mutations require
-  `confirm_non_undoable: true`; memo is a single line up to 1024 characters;
-  at most 256 marks. Errors: `MARKS_UNAVAILABLE` (old host),
-  `MARK_SET_REJECTED`, `MARK_MOVE_REJECTED`, `MARK_NOT_FOUND`,
-  `STALE_PROJECT_STATE` (rolled back).
-- `render_object_frame(obj, frame=...)` returns a revision-bound PNG capture
-  of one object; `render_object_audio(obj, frame_start=..., frame_end=...)`
-  returns stereo f32le PCM with SHA-256 integrity validation.
-- Inspection item types 17-19: `number_group`, `group`, `separator`.
+- Scene CRUD: `scene.list` / `scene.create` / `scene.switch`, plus scene
+  background color in `scene.get_current` / `scene.update_current` (0-255
+  RGBA). Scene delete and duplicate stay unsupported (no official SDK API).
+- Project files: `project.create` / `project.open` / `project.save` with
+  `show_confirm=false` automation handling.
+- File export: `export.start(output_file, output_plugin)` starts an async
+  export through a host output plugin (caller-supplied name; the SDK has no
+  enumeration API). `edit_state_changed` events fire with a null payload —
+  detect completion by combining event firing, `edit_state` polling, and an
+  output-file existence probe.
+- Object flags: `object.flag.get` / `object.flag.set` for `group`, `camera`,
+  `clipping` with revision-checked writes and rollback.
+- Stable IDs: `object.id.get` / `effect.id.get` return SDK int64 identifiers.
+- MCP Phase 1: `pip install 'aviutl2-api[mcp]'`, then run `aviutl2-mcp` as a
+  stdio MCP server on the agent host. Nine `bridge_*` hub-spoke tools; method
+  exposure is capability-gated and fails closed; unsupported methods are
+  hidden from the catalog; non-undoable calls need explicit
+  `confirm_non_undoable=true`.
+- 0.9.7 capabilities remain in force (host-gated native reorder/trim/marks/
+  object rendering; item types 17-19 in inspection).
 
 ## Choose one backend
 
@@ -34,8 +41,10 @@ fallbacks and fail closed with explicit errors.
 | Edit the scene open in one AviUtl2 window | `LiveProject` | No |
 | Apply one new plan to both | `SyncSession` | No |
 
-There is no background synchronization. Host Open/Save, export, playback, and
-API-lock removal are unsupported.
+There is no background synchronization. Playback control, scene delete and
+duplicate, and undo/redo stay unsupported. Explicit host operations on 2.1.10+
+hosts: `project.open`/`save` (replace/load/save the live project) and
+`export.start` (async export; never an implicit `.aup2` write).
 
 ## Standard imports
 

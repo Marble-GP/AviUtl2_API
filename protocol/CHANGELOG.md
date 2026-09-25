@@ -1,6 +1,47 @@
 # Live Bridge protocol changelog
 
 
+## Protocol v1 - plugin/client 0.10.0
+
+- Adopted the 2026-09-19 official SDK mirror (`mirror-2026-09-19`) end to end:
+  the 0.10.0 feature set builds on the 0.9.7 baseline update.
+- Added scene CRUD on AviUtl2 2.1.10+ (`sdk_scene_crud` host flag, host version
+  gate 2011000): `scene.list`, `scene.create`, and `scene.switch`. Scene
+  delete and duplicate remain unsupported because the official SDK does not
+  expose those operations; they answer `SDK_METHOD_UNAVAILABLE` and stay out
+  of the MCP method catalog.
+- Added scene background color: `scene.get_current` / `scene.update_current`
+  now carry the scene background color in the 0-255 RGBA convention.
+- Added project file commands on 2.1.10+: `project.create`, `project.open`,
+  and `project.save` with explicit `show_confirm=false` automation handling.
+- Added `export.start` on 2.1.10+: starts an asynchronous file export through
+  a host output plugin (plugin name is caller-supplied; the SDK exposes no
+  enumeration API). Export completion is observed via `edit_state_changed`
+  events whose payload is null; the recommended completion check combines the
+  event stream with `project.get_info` `edit_state` polling and an output file
+  existence probe.
+- Added object flags on 2.1.10+: `object.flag.get` / `object.flag.set` for
+  `group`, `camera`, and `clipping` flags with revision-checked writes,
+  apply-before-value rollback, and edit-section semantics.
+- Added stable IDs on 2.1.10+: `object.id.get` and `effect.id.get` return the
+  SDK int64 stable identifiers.
+- Registered the sequenced `edit_state_changed` notification (edit/preview
+  playback and file output transitions).
+- Added MCP Phase 1: the `aviutl2-mcp` entry point serves nine hub-spoke tools
+  (`bridge_card`, `bridge_status`, `bridge_call`, `bridge_help`, `bridge_find`,
+  `bridge_snapshot`, `bridge_render_object`, `bridge_render_object_audio`,
+  `bridge_watch_events`) over stdio on Windows-local hosts. Method exposure is
+  gated by the running host capability manifest, fails closed for unsupported
+  features, hides unsupported methods from the catalog, and requires explicit
+  `confirm_non_undoable` acknowledgment for non-undoable calls.
+- The Python client gained `LiveClient` methods for every new wire command
+  (`list_scenes`, `create_scene`, `switch_scene`, `create_project`,
+  `open_project`, `save_project`, `start_export`, `get_object_flag`,
+  `set_object_flag`, `get_object_id`, `get_effect_id`) plus typed result
+  models in `aviutl2_api.live.project_files`.
+- Release gate update: `sdk_scene_crud` is now satisfied by the 2.1.10 host
+  implementation; the remaining 1.0 blocker is `sdk_undo_redo`.
+
 ## Protocol v1 - plugin/client 0.9.7
 
 - Adopted the 2026-09-05 official SDK mirror (`mirror-2026-09-05`). New SDK
