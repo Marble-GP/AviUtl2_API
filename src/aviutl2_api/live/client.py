@@ -48,6 +48,15 @@ from .media import (
     MediaRelinkReceipt,
     MediaSplit,
 )
+from .project_files import (
+    OBJECT_FLAG_KINDS,
+    BackgroundColor,
+    ExportStartReceipt,
+    ObjectFlagState,
+    ProjectMutation,
+    SceneList,
+    StableId,
+)
 from .protocol import BridgeRemoteError, Response, decode_response, encode_request
 from .scene import SceneInfo
 from .sections import ObjectSections
@@ -74,6 +83,7 @@ _MUTATION_METHODS = frozenset(
         "layer.update",
         "media.relink",
         "media.trim",
+        "export.start",
         "mark.clear",
         "mark.move",
         "mark.set",
@@ -84,6 +94,7 @@ _MUTATION_METHODS = frozenset(
         "object.effect.delete",
         "object.effect.reorder",
         "object.effect.set_enabled",
+        "object.flag.set",
         "object.move",
         "object.section.create",
         "object.section.delete",
@@ -93,6 +104,11 @@ _MUTATION_METHODS = frozenset(
         "object.set_items",
         "object.set_name",
         "object.split_media",
+        "project.create",
+        "project.open",
+        "project.save",
+        "scene.create",
+        "scene.switch",
         "scene.update_current",
         "timeline.close_gap",
         "timeline.ripple_delete",
@@ -437,6 +453,215 @@ class LiveClient:
             timeout=timeout,
         )
         return MarkEditResult.from_wire(result)
+
+    def list_scenes(
+        self,
+        *,
+        timeout: float | None = None,
+    ) -> SceneList:
+        """List every scene in the currently open project."""
+        return SceneList.from_wire(self.call("scene.list", timeout=timeout))
+
+    def create_scene(
+        self,
+        name: str,
+        *,
+        width: int,
+        height: int,
+        rate: int,
+        scale: int,
+        sample_rate: int,
+        label: str | None = None,
+        background: BackgroundColor | Mapping[str, int] | None = None,
+        timeout: float | None = None,
+    ) -> ProjectMutation:
+        """Create a scene with settings AviUtl2 cannot Undo."""
+        if not isinstance(name, str) or not name:
+            raise ValueError("name must be a non-empty string")
+        for field, value in (
+            ("width", width),
+            ("height", height),
+            ("rate", rate),
+            ("scale", scale),
+            ("sample_rate", sample_rate),
+        ):
+            if isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{field} must be a positive integer")
+        params: dict[str, Any] = {
+            "name": name,
+            "width": width,
+            "height": height,
+            "rate": rate,
+            "scale": scale,
+            "sample_rate": sample_rate,
+        }
+        if label is not None:
+            params["label"] = label
+        if background is not None:
+            params["background"] = BackgroundColor.from_value(background).to_wire()
+        return ProjectMutation.from_wire(
+            self.call("scene.create", params, timeout=timeout)
+        )
+
+    def switch_scene(
+        self,
+        scene_id: int,
+        *,
+        timeout: float | None = None,
+    ) -> ProjectMutation:
+        """Switch the active scene; the change cannot be undone."""
+        if isinstance(scene_id, bool) or scene_id < 0:
+            raise ValueError("scene_id must be a non-negative integer")
+        return ProjectMutation.from_wire(
+            self.call("scene.switch", {"scene_id": scene_id}, timeout=timeout)
+        )
+
+    def create_project(
+        self,
+        *,
+        width: int,
+        height: int,
+        rate: int,
+        scale: int,
+        sample_rate: int,
+        background: BackgroundColor | Mapping[str, int] | None = None,
+        show_confirm: bool = False,
+        timeout: float | None = None,
+    ) -> ProjectMutation:
+        """Replace the running project with a new one (closes the current)."""
+        for field, value in (
+            ("width", width),
+            ("height", height),
+            ("rate", rate),
+            ("scale", scale),
+            ("sample_rate", sample_rate),
+        ):
+            if isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{field} must be a positive integer")
+        params: dict[str, Any] = {
+            "width": width,
+            "height": height,
+            "rate": rate,
+            "scale": scale,
+            "sample_rate": sample_rate,
+        }
+        if background is not None:
+            params["background"] = BackgroundColor.from_value(background).to_wire()
+        if show_confirm:
+            params["show_confirm"] = True
+        return ProjectMutation.from_wire(
+            self.call("project.create", params, timeout=timeout)
+        )
+
+    def open_project(
+        self,
+        file: str | PathLike[str],
+        *,
+        show_confirm: bool = False,
+        timeout: float | None = None,
+    ) -> ProjectMutation:
+        """Open one .aup2 project file in the running AviUtl2 process."""
+        params: dict[str, Any] = {"file": self._media_path(file)}
+        if show_confirm:
+            params["show_confirm"] = True
+        return ProjectMutation.from_wire(
+            self.call("project.open", params, timeout=timeout)
+        )
+
+    def save_project(
+        self,
+        file: str | PathLike[str],
+        *,
+        timeout: float | None = None,
+    ) -> ProjectMutation:
+        """Save the running project to one .aup2 file path."""
+        return ProjectMutation.from_wire(
+            self.call(
+                "project.save",
+                {"file": self._media_path(file)},
+                timeout=timeout,
+            )
+        )
+
+    def start_export(
+        self,
+        output_file: str | PathLike[str],
+        *,
+        output_plugin: str,
+        timeout: float | None = None,
+    ) -> ExportStartReceipt:
+        """Start an asynchronous file export; watch edit_state_changed to finish."""
+        if not isinstance(output_plugin, str) or not output_plugin:
+            raise ValueError("output_plugin must be a non-empty string")
+        return ExportStartReceipt.from_wire(
+            self.call(
+                "export.start",
+                {
+                    "output_file": self._media_path(output_file),
+                    "output_plugin": output_plugin,
+                },
+                timeout=timeout,
+            )
+        )
+
+    def get_object_flag(
+        self,
+        target: SnapshotObject,
+        kind: str,
+        *,
+        timeout: float | None = None,
+    ) -> ObjectFlagState:
+        """Read one object flag (grouping, camera, or clipping)."""
+        if kind not in OBJECT_FLAG_KINDS:
+            raise ValueError("kind must be one of " + ", ".join(OBJECT_FLAG_KINDS))
+        params = target.target_params()
+        params["kind"] = kind
+        return ObjectFlagState.from_wire(
+            self.call("object.flag.get", params, timeout=timeout)
+        )
+
+    def set_object_flag(
+        self,
+        target: SnapshotObject,
+        kind: str,
+        *,
+        flag: bool,
+        timeout: float | None = None,
+    ) -> ProjectMutation:
+        """Set one object flag; AviUtl2 cannot Undo this change."""
+        if kind not in OBJECT_FLAG_KINDS:
+            raise ValueError("kind must be one of " + ", ".join(OBJECT_FLAG_KINDS))
+        params = target.target_params()
+        params["kind"] = kind
+        params["flag"] = flag
+        return ProjectMutation.from_wire(
+            self.call("object.flag.set", params, timeout=timeout)
+        )
+
+    def get_object_id(
+        self,
+        target: SnapshotObject,
+        *,
+        timeout: float | None = None,
+    ) -> StableId:
+        """Return the stable int64 id for one object."""
+        return StableId.from_wire(
+            self.call("object.id.get", target.target_params(), timeout=timeout)
+        )
+
+    def get_effect_id(
+        self,
+        target: SnapshotObject,
+        *,
+        effect: str,
+        timeout: float | None = None,
+    ) -> StableId:
+        """Return the stable int64 id for one named effect on one object."""
+        if not isinstance(effect, str) or not effect:
+            raise ValueError("effect must be a non-empty string")
+        params = target.target_params()
+        params["effect"] = effect
+        return StableId.from_wire(self.call("effect.id.get", params, timeout=timeout))
 
     def history_undo(
         self,

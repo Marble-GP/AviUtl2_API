@@ -61,6 +61,16 @@ from .media import (
     MediaSplitRange,
 )
 from .project import LiveObject, LiveProject, ObjectSelection
+from .project_files import (
+    OBJECT_FLAG_KINDS,
+    BackgroundColor,
+    ExportStartReceipt,
+    ObjectFlagState,
+    ProjectMutation,
+    SceneList,
+    SceneListEntry,
+    StableId,
+)
 from .protocol import (
     MAX_PAYLOAD_BYTES,
     PROTOCOL_VERSION,
@@ -114,6 +124,8 @@ __all__ = [
     "EditingTransactionResult",
     "FrameMark",
     "FrameMarkList",
+    "BackgroundColor",
+    "ExportStartReceipt",
     "MarkEditResult",
     "ItemInspection",
     "LiveClient",
@@ -134,6 +146,12 @@ __all__ = [
     "ObjectSections",
     "PlacementConflictError",
     "ProjectSnapshot",
+    "ObjectFlagState",
+    "ProjectMutation",
+    "SceneList",
+    "SceneListEntry",
+    "StableId",
+    "OBJECT_FLAG_KINDS",
     "PreflightIssue",
     "PreflightReport",
     "ProtocolError",
