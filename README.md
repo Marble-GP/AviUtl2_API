@@ -554,6 +554,26 @@ selection, Alias generation, revision checks, and one grouped Undo operation are
 automatic. The native three-frame contact sheet stays in memory unless
 the caller explicitly invokes `sheet.save(...)`.
 
+### MCP Server (stdio)
+
+`aviutl2-api` ships an MCP Phase 1 stdio server (`aviutl2-mcp`) so MCP clients
+can drive the Live Bridge without writing Python:
+
+```powershell
+pip install 'aviutl2-api[mcp]'
+aviutl2-mcp
+```
+
+Register it in the MCP client (for example Claude Desktop) as a stdio server
+running `<python> -m aviutl2_api.mcp.server`. The server is Windows-local: it
+attaches to ONE running AviUtl2 process with External API permission enabled
+(see above), serves nine hub-spoke tools (`bridge_card`, `bridge_status`,
+`bridge_call`, `bridge_help`, `bridge_find`, `bridge_snapshot`,
+`bridge_render_object`, `bridge_render_object_audio`, `bridge_watch_events`),
+derives method exposure from the running host capability manifest, and fails
+closed before any pipe traffic. Full setup, tool catalog, and examples:
+[`docs/LIVE_BRIDGE_AGENT_API_MANUAL.md`](docs/LIVE_BRIDGE_AGENT_API_MANUAL.md).
+
 ## CLI Commands
 
 ### Project Operations
